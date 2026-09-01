@@ -1,0 +1,126 @@
+# csv-clean-sop —— 固定 SOP 型数据清洗 skill 的 GraphTree 转化。
+# SOP 来源与转换映射见 README.md；schema 事实源：docs/builder/design.md。
+#
+# 管线：profile（画像）→ rules（try：人工规则文件 | AI 按画像决策）
+#       → execute（确定性清洗 + 五重 verify + danger gate）→ report（审计报告）。
+version: "gt/1.0"
+node:
+  id: clean_sop
+  mode: sequence
+  needs: [shell, llm, human]  # 显式声明全量端口需求（多报合法，与结构推导一致）
+  input:
+    data_file: {type: path, from: params.data_file}
+    rules_file: {type: path, from: params.rules_file}  # 空串 = 由 AI 决策规则
+    out_file: {type: path, from: params.out_file}
+  output:
+    report: {type: json, compose: [report.output.report]}
+  verify:
+    - run: "python3 scripts/verify_report.py {output.report}"
+    - metric: "report.rows_out > 0"
+  children:
+    # SOP 步骤 1：先画像后动手（只读）
+    - id: profile
+      input:
+        data_file: {type: path, from: clean_sop.input.data_file}
+      do: {run: "python3 scripts/profile.py {input.data_file} > {artifact}"}
+      output:
+        profile: {type: json}
+      verify:
+        - run: "test -s {artifact}"
+        - metric: "len(profile.columns) > 0"
+    # SOP 步骤 2：规则决策——人工给 / AI 按画像决策，同一目标两条走法
+    - id: rules
+      mode: try
+      route: static
+      input:
+        rules_file: {type: path, from: clean_sop.input.rules_file}
+        profile: {type: json, from: profile.output.profile}
+      output:
+        rules: {type: json, compose: [given.output.rules]}
+      verify:
+        - run: "test -s {output.rules}"
+      children:
+        - id: given
+          route_hint: "rules_file 非空时走这里：校验并采用人工提供的规则文件"
+          input:
+            rules_file: {type: path, from: rules.input.rules_file}
+          do: {run: "test -n {input.rules_file} && python3 scripts/validate_rules.py {input.rules_file} > {artifact}"}
+          output:
+            rules: {type: json}
+          verify:
+            - run: "test -s {artifact}"
+        - id: decide
+          route_hint: "rules_file 为空时的退路：AI 读画像、按 SOP 决策表生成规则"
+          input:
+            profile: {type: json, from: rules.input.profile}
+          do:
+            llm: |
+              你是数据清洗 SOP 的规则决策器。先用文件读取工具读数据画像 JSON：
+              {input.profile}
+              （含每列的 null_rate / dtype_guess / samples / 数值列 min/max/mean）。
+              然后逐列决策清洗规则，硬约束：
+              - 禁止对所有数值列一刀切 outlier method=none：有物理边界的对称分布列
+                （年龄/身高/分数类）用 iqr；长尾列（薪资/金额/计数类）用 none 或
+                percentile（在 outlier.per_column 里逐列覆盖）；
+              - 明显不可能的取值（如年龄为负、年龄 > 150）进 sentinels；
+              - 缺失填充与列类型匹配：数值列 median/mean，文本列 "Unknown" 或 mode，
+                有缺失的列都必须显式进 missing；
+              - types 按画像的 dtype_guess 显式声明；
+              - 列名一律使用画像中每列的 normalized 字段（清洗管线按同一规则
+                标准化列名，含重名去重后缀；name 是原始列名，仅供理解语义）。
+              把最终规则 JSON 写入这个文件路径（只写这一个文件，写别的无效）：
+              {artifact}
+              JSON schema：
+              {"types": {列: "int"|"float"|"str"|"date"}, "dedup": true|false,
+               "missing": {列: "median"|"mean"|"mode"|字面量},
+               "sentinels": {列: [哨兵值...]},
+               "outlier": {"method": "iqr"|"percentile"|"zscore"|"none", "k": 1.5,
+                           "per_column": {列: {"method": ...}}},
+               "text_normalize": [列...]}
+          output:
+            rules: {type: json}
+          verify:
+            - run: "python3 scripts/validate_rules.py {artifact} > /dev/null"
+            - llm: >-
+                评审本节点产物（规则 JSON）：是否逐列依据画像分布选择 outlier
+                方法（无一刀切 none）；不可能取值是否进了 sentinels；缺失填充策略
+                与列类型是否匹配；types 是否与画像 dtype_guess 一致。
+          on_fail: {retry: 2}
+    # SOP 步骤 3-4：确定性执行 + 执行后验收（留存率/计数自洽/AI 评审/人抽查）
+    - id: execute
+      danger: true  # 写图外交付物 out_file；脚本自身也拒绝覆盖既有文件
+      input:
+        data_file: {type: path, from: clean_sop.input.data_file}
+        rules: {type: json, from: rules.output.rules}
+        out_file: {type: path, from: clean_sop.input.out_file}
+      do: {run: "python3 scripts/clean.py {input.data_file} {input.rules} {input.out_file} > {artifact}"}
+      output:
+        audit: {type: json}
+      verify:
+        - run: "test -s {artifact}"
+        - metric: "audit.rows_out > 0"
+        - metric: "audit.retention_rate_pct >= 90"
+        - llm: >-
+            清洗合规审查。可读文件：源 {input.data_file}，交付 {input.out_file}，
+            实际执行的规则 {input.rules}，审计 JSON 见本节点 artifact。
+            按 SOP 决策表判定（不是另立标准）：1) 行数减少只能来自去重，异常值
+            只裁剪不删行；2) outlier 方法选择是否与列分布匹配——对称分布列
+            （年龄/身高/分数类）应 iqr，长尾列（薪资/金额/计数类）none 或
+            percentile 合法，审查 rules 的选择而非要求所有列都被裁剪；
+            3) 无静默丢数据（审计各类计数与留存率自洽，warnings 所列的规则
+            未命中列属于违规）；4) 缺失填充与列类型匹配（int 列填充值为整数）。
+            读交付文件前几行抽查后判定。
+        - human: >-
+            请抽查交付文件 {input.out_file} 的前若干行，并对照本节点审计
+            artifact 确认清洗结果可交付（留存率、填充值、裁剪边界是否合理）。
+    # SOP 步骤 5：审计 → 人读报告 + 机读摘要
+    - id: report
+      input:
+        audit: {type: json, from: execute.output.audit}
+        out_file: {type: path, from: clean_sop.input.out_file}
+      do: {run: "python3 scripts/quality_report.py {input.audit} {input.out_file} > {artifact}"}
+      output:
+        report: {type: json}
+      verify:
+        - run: "test -s {artifact}"
+        - metric: "report.rows_out > 0"

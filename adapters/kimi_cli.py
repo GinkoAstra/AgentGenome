@@ -3,10 +3,49 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from typing import Any
 
 from core import Candidate, FailDecl, JudgeResult, PortError
+
+
+def _parse_json_object(raw: str) -> Any:
+    """从 print 模式 stdout 中解析单个 JSON 对象。
+
+    先整段解析；失败则剥离 kimi text 模式的 transcript 前缀（行首 "• "）
+    并提取首个括号配平的 JSON 对象（真实验收发现：kimi 0.39.1 的 stdout
+    带 • 前缀，pi 偶发围栏/前言，整段 json.loads 对两者都太脆）。
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    cleaned = re.sub(r"(?m)^\s*•\s*", "", raw)
+    start = cleaned.find("{")
+    if start >= 0:
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(cleaned)):
+            char = cleaned[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return json.loads(cleaned[start : index + 1])
+    raise ValueError("stdout 中不存在可解析的 JSON 对象")
 
 
 class KimiCLI:
@@ -40,9 +79,9 @@ class KimiCLI:
             f"{json.dumps(context, ensure_ascii=False)}"
         )
         try:
-            value = json.loads(raw)
+            value = _parse_json_object(raw)
             passed, reason = value["passed"], value["reason"]
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        except (ValueError, KeyError, TypeError) as exc:
             raise PortError("Kimi judge 输出无效", kind="bad_output") from exc
         if not isinstance(passed, bool) or not isinstance(reason, str) or not reason:
             raise PortError("Kimi judge 输出不符合协议", kind="bad_output")
@@ -60,8 +99,8 @@ class KimiCLI:
             )
         )
         try:
-            chosen = json.loads(raw)["chosen"]
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            chosen = _parse_json_object(raw)["chosen"]
+        except (ValueError, KeyError, TypeError) as exc:
             raise PortError("Kimi route 输出无效", kind="bad_output") from exc
         if not isinstance(chosen, str) or chosen not in {item.id for item in candidates}:
             raise PortError("Kimi route 输出不符合候选池协议", kind="bad_output")

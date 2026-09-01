@@ -73,6 +73,24 @@ raise SystemExit(9)
     assert "fallback" in prompt and "failed" in prompt
 
 
+def test_kimi_cli_parses_transcript_prefixed_and_fenced_json(monkeypatch) -> None:
+    """真实验收发现：kimi text 模式 stdout 带 "• " 前缀，pi 偶发围栏/前言。"""
+    prefixed = subprocess.CompletedProcess([], 0, '• {"passed": true, "reason": "ok"}\n', "")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: prefixed)
+    assert KimiCLI().judge("criterion", {}).passed is True
+
+    fenced = subprocess.CompletedProcess([], 0, '结论如下：\n```json\n{"passed": false, "reason": "不够"}\n```\n', "")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: fenced)
+    result = KimiCLI().judge("criterion", {})
+    assert result.passed is False and result.reason == "不够"
+
+    garbage = subprocess.CompletedProcess([], 0, "没有 JSON", "")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: garbage)
+    with pytest.raises(PortError) as error:
+        KimiCLI().judge("criterion", {})
+    assert error.value.kind == "bad_output"
+
+
 class _TtyInput(io.StringIO):
     def isatty(self) -> bool:
         return True
