@@ -1,0 +1,32 @@
+# 数据清洗示例图（M0 纯命令切片）——ticket 10 试金石产物。
+# schema 事实源：docs/builder/design.md；语义事实源：docs/core/system-design.md。
+version: "gt/1.0"
+node:
+  id: clean-sop
+  mode: sequence
+  input:
+    data_file: {type: path, from: params.data_file}
+  output:
+    report: {type: json, compose: [summarize.output.report]}
+  verify:
+    - run: "python3 scripts/verify_report.py {output.report}"
+    - metric: "report.rows > 0"
+  children:
+    - id: clean
+      input:
+        data_file: {type: path, from: clean-sop.input.data_file}
+      do: {run: "python3 scripts/clean.py {input.data_file} > {artifact}"}
+      output:
+        cleaned: {type: path}
+      verify:
+        - run: "test -s {artifact}"
+      on_fail: {retry: 2}
+    - id: summarize
+      input:
+        cleaned: {type: path, from: clean.output.cleaned}
+      do: {run: "python3 scripts/summarize.py {input.cleaned} > {artifact}"}
+      output:
+        report: {type: json}
+      verify:
+        - run: "test -s {artifact}"
+        - metric: "len(report.columns) > 0"

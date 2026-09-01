@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graphtree"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["PyYAML"]
+
+[project.scripts]
+graphtree = "cli:main"
+
+[tool.setuptools]
+py-modules = ["cli"]
+
+[tool.setuptools.packages.find]
+include = ["builder*", "core*", "adapters*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
