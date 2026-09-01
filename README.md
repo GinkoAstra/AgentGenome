@@ -1,10 +1,10 @@
-# GraphTree
+# AgentGenome
 
 > 状态：早期开发中（WIP），接口与语义可能变化。
 
-GraphTree 是任务的结构化编排/执行框架：把需求编译成带 `verify` / `on_fail`
-声明的 YAML 执行图，由 CORE 引擎执行并做机器验收，产出 append-only 台账
-（JSONL）与断点，运行可 resume、可复放、可审计。
+AgentGenome 是 LLM agent 任务的结构化编排/执行框架：把需求编译成带 `verify` / `on_fail`
+声明的 YAML 执行图——如同在"诞生"时固定的基因组，由 CORE 引擎执行并做机器验收，
+产出 append-only 台账（JSONL）与断点，运行可 resume、可复放、可审计。
 
 ## 特性
 
@@ -27,17 +27,17 @@ pip install -e .
 
 ```bash
 # 生成一个骨架图
-graphtree init my-task
+agentgenome init my-task
 
 # 编译期检查
-graphtree check my-task/graph.yaml
+agentgenome check my-task/graph.yaml
 
 # 执行
-graphtree run my-task/graph.yaml
+agentgenome run my-task/graph.yaml
 
 # 中断后续跑 / 查看状态
-graphtree resume <run-id>
-graphtree status <run-id>
+agentgenome resume <run-id>
+agentgenome status <run-id>
 ```
 
 可运行示例见 `templates/data-cleaning/`（图 + 脚本）。
