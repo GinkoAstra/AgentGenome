@@ -42,6 +42,20 @@ agentgenome status <run-id>
 
 可运行示例见 `templates/data-cleaning/`（图 + 脚本）。
 
+## 引用 / Citation
+
+如果你在研究中使用了 AgentGenome，请引用。配套论文发表后，此处会更新为论文的
+正式引用信息；目前请先引用本仓库：
+
+```bibtex
+@software{agentgenome2026,
+  author = {GinkoAstra},
+  title = {AgentGenome: Verification-Pinned Executable Task Graphs for LLM Agents},
+  year = {2026},
+  url = {https://github.com/GinkoAstra/AgentGenome}
+}
+```
+
 ## 开发
 
 ```bash
