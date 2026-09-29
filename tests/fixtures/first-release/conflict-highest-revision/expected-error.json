@@ -1,0 +1,15 @@
+{
+  "status": "rejected",
+  "reason": "conflicting_highest_revision",
+  "order_id": "O9001",
+  "revision": 2,
+  "source_data_rows": [
+    2,
+    3
+  ],
+  "conflicting_fields": [
+    "refund_cents"
+  ],
+  "successful_outputs_expected": false,
+  "fixture_only": true
+}

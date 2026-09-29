@@ -1,0 +1,521 @@
+{
+  "schema": "semantic-authoring-labels/1",
+  "label_method": {
+    "method": "independent_role_manual_style_source_review",
+    "description": "由独立 Codex 子角色在读取被测生成结果之前，逐行审阅八份原始 Skill、唯一被引用的 details.md 及首版 SPEC 的原始业务契约；按原文而不是预期程序输出确定状态、模式、规则和阻塞源行。",
+    "human_blind_review": false,
+    "algorithm_holdout": false,
+    "model_outputs_read": false,
+    "network_used": false,
+    "scope": "小型声明订单契约语义验证集；非人类盲评，非算法收益 holdout，不支持总体语言理解准确率或成本收益外推。",
+    "state_convention": "delivered 表示定义编制可交付，不表示实际订单任务已经运行、验收或发布；waiting_info 表示编制规则有缺口；stopped 必须因指定未支持原要求而阻止完整交付。",
+    "answer_convention": "仅 case-03/04 的模拟回答选 highest_revision；该选项须说明最大整数修订、并列相同折叠/冲突拒绝的完整语义，不应仅传未解释的标签作为业务授权。case-06 的 rule 是明确留到运行的参数，编制阶段不注入答案。",
+    "source_basis": [
+      "first-release-spec.md §2",
+      "first-release-spec.md §3",
+      "first-release-spec.md §12.1",
+      "first-release-spec.md §19.3"
+    ]
+  },
+  "cases": [
+    {
+      "id": "case-01",
+      "initial_state": "delivered",
+      "mode": "fixed",
+      "rule_status": "known",
+      "rule_value": "highest_revision",
+      "answer": null,
+      "reject_reason": null,
+      "reject_spans": [],
+      "rationale": "原文完整规定本地固定订单处理、最大整数修订与并列冲突处理、三份产物及独立验收；本次路径留作参数，不阻碍编制，不应额外询问保留规则。",
+      "source_constraints": [
+        {
+          "file": "SKILL.md",
+          "line": 3,
+          "meaning": "三份交付物为清洗明细、客户汇总和质量统计；source_file 每次绑定，各批独立，同一定义复用。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 5,
+          "meaning": "输入恰为五个订单字段；revision 为整数，金额为整数分，禁止浮点、舍入和猜补缺失值。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 7,
+          "meaning": "customer_id 仅去两端空白；中间字符、订单号、修订号和金额保持不变。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 9,
+          "meaning": "客户归属必须检查同单全部修订；规范化客户不一致则拒绝。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 11,
+          "meaning": "选择最大整数 revision，不能按末行；最高修订客户与金额相同可合并，冲突拒绝。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 13,
+          "meaning": "清洗表每单一行，净额等于 gross 减 refund，按订单号升序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 15,
+          "meaning": "按规范化客户统计订单数及 gross/refund/net 合计，按客户号升序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 17,
+          "meaning": "质量包含输入/保留/移除数量及三项金额；由原始输入和规则独立重算并核对所有产物。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 19,
+          "meaning": "全部业务使用已声明注册的固定实现；模型不得生成替代代码或改程序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 21,
+          "meaning": "仅本地只读输入和本次产物目录写入；禁止改输入、删除、上传及其他外部效果。"
+        }
+      ]
+    },
+    {
+      "id": "case-02",
+      "initial_state": "delivered",
+      "mode": "pi",
+      "rule_status": "known",
+      "rule_value": "highest_revision",
+      "answer": null,
+      "reject_reason": null,
+      "reject_spans": [],
+      "rationale": "主文明确把 details.md 作为任务组成部分；附件已完整给出最大修订及其余业务契约。清洗允许受约束 Pi 与已检查子方法，应编制成功，不可遗漏附件或将明文规则当未知。",
+      "source_constraints": [
+        {
+          "file": "SKILL.md",
+          "line": 3,
+          "meaning": "三份本地交付物；每次绑定 source_file，各批独立且方法可换输入复用。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 5,
+          "meaning": "details.md 是本任务的规范性组成部分，必须与主文一并遵守。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 7,
+          "meaning": "清洗允许 Pi 和通过检查的子方法，但工具必须已声明且模型不能改固定实现或检查。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 9,
+          "meaning": "输入本地只读、输出限本次目录；无上传、删除、业务网络和其他外部权限。"
+        },
+        {
+          "file": "details.md",
+          "line": 3,
+          "meaning": "CSV 五字段及顺序明确；revision 是整数，金额为整数分，禁止浮点、舍入和猜值。"
+        },
+        {
+          "file": "details.md",
+          "line": 5,
+          "meaning": "仅修剪客户标识首尾空白，不改中间字符、订单号、修订号或金额。"
+        },
+        {
+          "file": "details.md",
+          "line": 7,
+          "meaning": "客户一致性覆盖同单所有修订，任一规范化客户差异均拒绝。"
+        },
+        {
+          "file": "details.md",
+          "line": 9,
+          "meaning": "按整数 revision 最大值选行，与输入位置无关；最高修订相同内容折叠，冲突拒绝。"
+        },
+        {
+          "file": "details.md",
+          "line": 11,
+          "meaning": "逐单一行，净额为 gross 减 refund，按订单号排序。"
+        },
+        {
+          "file": "details.md",
+          "line": 13,
+          "meaning": "按规范化客户汇总订单数及三项金额，客户升序。"
+        },
+        {
+          "file": "details.md",
+          "line": 15,
+          "meaning": "质量记录三项数量及三项金额；从原始输入独立重算三份结果，不能仅信任生产者合计。"
+        }
+      ]
+    },
+    {
+      "id": "case-03",
+      "initial_state": "waiting_info",
+      "mode": "pi",
+      "rule_status": "unknown",
+      "rule_value": null,
+      "answer": "highest_revision",
+      "reject_reason": null,
+      "reject_spans": [],
+      "rationale": "要求同一订单只留一行，却完全未给保留哪一条的标准；revision 字段的存在不构成选择最大值的授权。其余本地订单处理要求明确，应结构化询问保留口径而不是默认为首次/最高或随意停止。问答驱动选择 highest_revision，完整含义须随选项说明。",
+      "source_constraints": [
+        {
+          "file": "SKILL.md",
+          "line": 3,
+          "meaning": "本地订单清洗、客户汇总、质量统计；source_file 参数化，批次隔离且定义复用。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 5,
+          "meaning": "五字段、整数 revision 和整数分；禁止浮点、舍入和猜补。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 7,
+          "meaning": "仅去客户首尾空白，保留其他字段值。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 9,
+          "meaning": "同单全部修订的规范化客户必须一致，否则拒绝。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 11,
+          "meaning": "要求每单一行、gross-refund 净额及订单排序，但没有说明重复订单采用哪条修订；这是待询问项。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 13,
+          "meaning": "按规范化客户汇总订单数及 gross/refund/net，客户升序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 15,
+          "meaning": "质量数量/金额和三份产物须从原始输入独立重算核对。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 17,
+          "meaning": "清洗允许受约束 Pi 与检查过的子方法，不得改固定代码与验收。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 19,
+          "meaning": "仅本地输入读取及本次目录输出，禁止改输入、删除、上传及其他外部效果。"
+        }
+      ]
+    },
+    {
+      "id": "case-04",
+      "initial_state": "waiting_info",
+      "mode": "pi",
+      "rule_status": "unknown",
+      "rule_value": null,
+      "answer": "highest_revision",
+      "reject_reason": null,
+      "reject_spans": [],
+      "rationale": "“最新”未明说依据整数 revision、其他时间信息还是输入位置，也未明确最高修订并列的处置。不能仅凭字段名称推定最高 revision；应询问并由答案绑定完整保留规则，而不是把歧义文本当已知规则交付。问答驱动选择最高整数修订、并列相同折叠/冲突拒绝的 highest_revision 口径。",
+      "source_constraints": [
+        {
+          "file": "SKILL.md",
+          "line": 3,
+          "meaning": "三种报告和本次 source_file 参数，批次独立，定义不得写死本次输入。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 5,
+          "meaning": "本地五字段 CSV，整数修订、整数分，禁止浮点、舍入与猜补。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 7,
+          "meaning": "仅删除客户首尾空白，不改其他标识/修订/金额值。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 9,
+          "meaning": "全修订规范化客户不一致时拒绝，不替用户挑客户。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 11,
+          "meaning": "“保留最新”缺具体比较及并列规则；同时已明确每单一行、净额公式和订单排序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 13,
+          "meaning": "按规范化客户汇总单数和三项金额，客户升序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 15,
+          "meaning": "质量数量/金额及明细、汇总、统计都须从原始输入独立复算。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 17,
+          "meaning": "清洗可用受约束 Pi 和通过检查的子方法，禁止改能力代码和检查。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 19,
+          "meaning": "本地输入只读、输出限本次目录；禁止删除、上传及外部业务效果。"
+        }
+      ]
+    },
+    {
+      "id": "case-05",
+      "initial_state": "delivered",
+      "mode": "fixed",
+      "rule_status": "known",
+      "rule_value": "first",
+      "answer": null,
+      "reject_reason": null,
+      "reject_spans": [],
+      "rationale": "原文明示采用每单在输入中的第一次出现，且先检查全部修订客户归属；不能把熟悉的最高 revision 规则强加给本任务。完整固定处理、交付及验收契约均已提供，应无需询问而编制。",
+      "source_constraints": [
+        {
+          "file": "SKILL.md",
+          "line": 3,
+          "meaning": "逐批三份本地结果，source_file 运行绑定且不同输入复用同一定义。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 5,
+          "meaning": "精确五字段，后三列整数、金额分，禁浮点、舍入和猜缺值。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 7,
+          "meaning": "只去客户标识两端空白，不改其余字符、订单、修订与金额。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 9,
+          "meaning": "先检查同单全部修订客户一致性，后续记录冲突也必须拒绝。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 11,
+          "meaning": "一致性检查后按输入首次出现选行，不能按 revision 改选；每单一行、整数净额与订单排序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 13,
+          "meaning": "规范化客户的订单数与三项金额汇总，客户升序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 15,
+          "meaning": "质量数量与金额，以及所有交付物从原始输入按首次规则独立核对。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 17,
+          "meaning": "全部业务用已注册固定实现；禁止模型替换代码和临时重写脚本。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 19,
+          "meaning": "本次本地输入只读、输出本次目录；禁删除、上传和其他外部效果。"
+        }
+      ]
+    },
+    {
+      "id": "case-06",
+      "initial_state": "delivered",
+      "mode": "pi",
+      "rule_status": "runtime",
+      "rule_value": null,
+      "answer": null,
+      "reject_reason": null,
+      "reject_spans": [],
+      "rationale": "两种保留口径及各自语义都已明确，原文主动将选择留给每次运行参数 rule；这是定义层的有意参数化，不是编制歧义，不应在编制时强制选择或偷偷设置默认值。执行具体批次前才必须取得显式合法值。",
+      "source_constraints": [
+        {
+          "file": "SKILL.md",
+          "line": 3,
+          "meaning": "三份输出、每批 source_file 参数及隔离复用。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 5,
+          "meaning": "五字段，整数 revision/分金额；禁浮点、舍入和猜值。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 7,
+          "meaning": "只修剪客户首尾空白，其余字符及各业务字段值不变。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 9,
+          "meaning": "客户一致性覆盖全部修订，不得忽略不保留记录的冲突。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 11,
+          "meaning": "rule 每次显式取 first 或 highest_revision，无默认；first 为首次，highest 为最大整数修订且并列相同折叠、冲突拒绝。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 13,
+          "meaning": "本次 rule 明确后才去重，输出每单一行及 gross-refund 净额，订单升序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 15,
+          "meaning": "按规范化客户统计单数和三项金额，客户升序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 17,
+          "meaning": "质量数量/金额及三份交付均由原始输入和本次 rule 独立重算。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 19,
+          "meaning": "清洗可用受约束 Pi/受检查子方法，代码、权限和验收均不可改。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 21,
+          "meaning": "只读本地输入，输出限本次目录，禁止删除、上传及外部效果。"
+        }
+      ]
+    },
+    {
+      "id": "case-07",
+      "initial_state": "stopped",
+      "mode": "pi",
+      "rule_status": "known",
+      "rule_value": "highest_revision",
+      "answer": null,
+      "reject_reason": "SKILL.md 第19行把 HTTPS 上传三份已验收结果规定为每次交付的必做步骤；首版本地订单契约没有相应声明能力与上传验收。仅编制本地结果会遗漏原始要求，必须具体指出未支持的外部上传要求并停止完整交付。",
+      "reject_spans": [
+        {
+          "file": "SKILL.md",
+          "line": 19
+        }
+      ],
+      "rationale": "本地处理部分和最大整数修订规则明确，不能伪装成缺去重参数。原文为上传明确给出例外权限，逻辑上并非自相矛盾；但该例外并不使当前固定能力注册表自动拥有上传实现。正确拒绝须定位第19行必做上传，普通后端错误或任意停止不能算正确。",
+      "source_constraints": [
+        {
+          "file": "SKILL.md",
+          "line": 3,
+          "meaning": "三种本地订单产物、运行输入参数和批次隔离复用。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 5,
+          "meaning": "五字段整数修订、整数分；禁止浮点、舍入与猜补。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 7,
+          "meaning": "仅规范化客户首尾空白，其余业务值不变。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 9,
+          "meaning": "全修订客户一致性检查，不只看保留修订。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 11,
+          "meaning": "已知最大整数 revision；最高并列相同合并、冲突拒绝，不能以末行代替。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 13,
+          "meaning": "清洗每单一行、gross-refund 净额和订单排序；按客户汇总单数及金额、客户排序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 15,
+          "meaning": "完整质量数量/金额及三份产物从原始输入独立核对。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 17,
+          "meaning": "清洗允许受约束 Pi 或受检查子方法，固定能力与验收不能改写。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 19,
+          "meaning": "输入只读不可删；处理产物限本次目录，但验收后三份结果还必须经 HTTPS 上传指定地址，单留本地不算完成；该必做要求超出首版本地能力。"
+        }
+      ]
+    },
+    {
+      "id": "case-08",
+      "initial_state": "stopped",
+      "mode": "fixed",
+      "rule_status": "known",
+      "rule_value": "highest_revision",
+      "answer": null,
+      "reject_reason": "SKILL.md 第23行要求每次运行都从清洗明细和客户汇总排除 C009 订单。这是强制业务过滤规则，首版完整订单清洗/汇总契约没有声明该过滤能力；不得藏为示例背景或擅自按常规全量订单定义交付。",
+      "reject_spans": [
+        {
+          "file": "SKILL.md",
+          "line": 23
+        }
+      ],
+      "rationale": "前文已明确固定模式和最大整数修订，因此不需要补规则答案。第23行虽在“使用背景与示例”标题之下，却用“必须”“每一次运行”规定普遍过滤义务，并与每个订单保留一行的完整报表口径形成需要说明的差异。必须保留并定位此未支持要求，不能用标题把它当无关背景。",
+      "source_constraints": [
+        {
+          "file": "SKILL.md",
+          "line": 3,
+          "meaning": "三份订单产物、每次输入绑定、隔离处理和通用定义复用。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 5,
+          "meaning": "五字段整数修订和整数分，禁止浮点、舍入与猜补。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 7,
+          "meaning": "客户只去首尾空白，不改其他字符与业务字段。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 9,
+          "meaning": "检查同单所有修订的客户一致性，不得丢弃部分修订躲避冲突。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 11,
+          "meaning": "最大整数 revision，非最后一行；最高并列内容相同可折叠，冲突拒绝。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 13,
+          "meaning": "常规清洗每单一行、gross-refund 净额、订单排序；客户单数/金额汇总及客户排序。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 15,
+          "meaning": "数量/金额质量报告和全部输出由原始输入独立重算，不能只信执行者合计。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 17,
+          "meaning": "全部业务用已声明固定实现，不可由模型替换脚本或放宽检查。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 19,
+          "meaning": "本地输入只读、仅本次目录写入，禁删、网络、上传与外部效果。"
+        },
+        {
+          "file": "SKILL.md",
+          "line": 23,
+          "meaning": "C009 订单必须从明细和客户汇总中全部排除，且适用于每次运行；这是未支持的普遍业务要求，不是可忽略的示例。"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "input_rows": 7,
+  "retained_orders": 5,
+  "removed_rows": 2,
+  "total_gross_cents": 49000,
+  "total_refund_cents": 3000,
+  "total_net_cents": 46000
+}

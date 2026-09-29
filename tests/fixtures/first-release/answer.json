@@ -1,0 +1,21 @@
+{
+  "question_id": "dedup_policy",
+  "answer": {
+    "group_by": "order_id",
+    "keep": "highest_revision",
+    "revision_order": "integer_numeric",
+    "customer_normalization": "trim_leading_and_trailing_whitespace",
+    "cross_customer_policy": "reject_if_any_revision_has_a_different_normalized_customer",
+    "highest_revision_tie_policy": {
+      "identical_normalized_records": "retain_one",
+      "conflicting_normalized_records": "reject",
+      "comparison_fields": [
+        "customer_id",
+        "gross_cents",
+        "refund_cents"
+      ]
+    }
+  },
+  "explanation_zh": "同一订单保留整数 revision 最大的记录，不按 CSV 首行或末行决定；最高修订并列且规范化后内容相同可合并为一条，内容冲突必须拒绝。同一订单在任一修订中的规范化客户归属不同也必须拒绝。",
+  "fixture_only": true
+}

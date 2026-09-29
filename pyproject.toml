@@ -10,12 +10,16 @@ dependencies = ["PyYAML"]
 
 [project.scripts]
 agentgenome = "cli:main"
+agentgenome-sop = "sop.cli:main"
 
 [tool.setuptools]
 py-modules = ["cli"]
 
 [tool.setuptools.packages.find]
-include = ["builder*", "core*", "adapters*"]
+include = ["builder*", "core*", "adapters*", "sop*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+sop = ["*.mjs", "PROTOCOL.md"]

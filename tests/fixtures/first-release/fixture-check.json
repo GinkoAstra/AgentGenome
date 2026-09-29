@@ -1,0 +1,106 @@
+{
+  "checked_at_utc": "2026-09-28T06:44:32.640514+00:00",
+  "scope": "fixture_internal_consistency_only",
+  "product_or_model_executed": false,
+  "method": "Independent one-off Python standard-library computation from input.csv compared with separately authored expected files; integer arithmetic only.",
+  "batches": {
+    "batch-01": {
+      "quality": {
+        "input_rows": 7,
+        "retained_orders": 5,
+        "removed_rows": 2,
+        "total_gross_cents": 49000,
+        "total_refund_cents": 3000,
+        "total_net_cents": 46000
+      },
+      "customer_summary": [
+        {
+          "customer_id": "C001",
+          "order_count": 2,
+          "gross_cents": 17000,
+          "refund_cents": 1500,
+          "net_cents": 15500
+        },
+        {
+          "customer_id": "C002",
+          "order_count": 2,
+          "gross_cents": 12000,
+          "refund_cents": 1500,
+          "net_cents": 10500
+        },
+        {
+          "customer_id": "C003",
+          "order_count": 1,
+          "gross_cents": 20000,
+          "refund_cents": 0,
+          "net_cents": 20000
+        }
+      ],
+      "first_row_policy_net_cents": 44500,
+      "last_row_policy_net_cents": 46000
+    },
+    "batch-02": {
+      "quality": {
+        "input_rows": 9,
+        "retained_orders": 6,
+        "removed_rows": 3,
+        "total_gross_cents": 28500,
+        "total_refund_cents": 6000,
+        "total_net_cents": 22500
+      },
+      "customer_summary": [
+        {
+          "customer_id": "C010",
+          "order_count": 2,
+          "gross_cents": 6000,
+          "refund_cents": 500,
+          "net_cents": 5500
+        },
+        {
+          "customer_id": "C011",
+          "order_count": 2,
+          "gross_cents": 19000,
+          "refund_cents": 3000,
+          "net_cents": 16000
+        },
+        {
+          "customer_id": "C012",
+          "order_count": 2,
+          "gross_cents": 3500,
+          "refund_cents": 2500,
+          "net_cents": 1000
+        }
+      ],
+      "first_row_policy_net_cents": 22000,
+      "last_row_policy_net_cents": 23000
+    }
+  },
+  "negative_fixture": {
+    "reason": "conflicting_highest_revision",
+    "order_id": "O9001",
+    "revision": 2,
+    "source_data_rows": [
+      2,
+      3
+    ],
+    "conflicting_fields": [
+      "refund_cents"
+    ],
+    "rejected": true
+  },
+  "sha256": {
+    "README.md": "8c3f177b1bb3fa1467f173a9dba1d3bf77496552a7189c08dd972fb84e900bb8",
+    "answer.json": "11e30261939f7b4a5c02921e8f8bca7565c1738390a7d94197d443cf8ba87019",
+    "batch-01/expected/cleaned.csv": "f7b113a957832b685d04ef7a4418cbffb5ba0c615282df00dca14d1e5cf34834",
+    "batch-01/expected/quality.json": "c0031e1e238d2c504e97c0f24b48743711f7c62dc248847b81171df0034ba530",
+    "batch-01/expected/summary.csv": "04eb89cf30b0b7c9f0f0af89b853fe54d8a56f867dadda0d9fa17cab2dfb4ce8",
+    "batch-01/input.csv": "54a80aa0c528dc5054d08a3666044a8f4307c404aeebde10597da4878677b0bb",
+    "batch-02/expected/cleaned.csv": "7ee3a4a9b6f93ed25cf288e308071f35d00694ec4abab68fd0d9cbd11d3bbc46",
+    "batch-02/expected/quality.json": "db45f3c1f46f5d802fd233a256741d138b5a3ffdc48fdad0eba1d556edf28da7",
+    "batch-02/expected/summary.csv": "f32d0618b62e269deb9bde3bd991649c168a6b8d7e21a3ccc4bcbe7ef3a0748d",
+    "batch-02/input.csv": "c2ac1c11ada3b65747eda050de6aa4bc04a693355f34daecb3b9e10bc6ab5353",
+    "conflict-highest-revision/expected-error.json": "42ca78d448f1b010eaf87f1b720d65617218b5ff54a7dd43021b8a3a4fe768d5",
+    "conflict-highest-revision/input.csv": "ceaf19926ca46243fe49ace5b9bce9c30a89648d159d9aac9519c81748d1353f",
+    "source-request.zh.md": "8a305fdaa4e243d330d88d37548662c6b119af72a69fe0bdecd47a00d9c3828f"
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "checked_at_utc": "2026-09-28T08:54:13.255247+00:00",
+  "scope": "fixture_internal_consistency_only",
+  "product_or_model_executed": false,
+  "system_validation": false,
+  "verified": true,
+  "method": "Independent one-off Python standard-library reread and exact typed row comparison; integer arithmetic; no product code.",
+  "source": {
+    "path": "../first-release/batch-01/input.csv",
+    "sha256": "54a80aa0c528dc5054d08a3666044a8f4307c404aeebde10597da4878677b0bb",
+    "rows": 7,
+    "totals": {
+      "gross_cents": 67000,
+      "refund_cents": 4000
+    }
+  },
+  "checks": {
+    "json_array_has_integer_revision_and_amounts": true,
+    "json_matches_original_csv_row_by_row": true,
+    "expected_csv_matches_original_bytes": true,
+    "customer_whitespace_preserved": true,
+    "expected.csv": {
+      "fixture_verdict": "accept",
+      "rows": 7,
+      "totals": {
+        "gross_cents": 67000,
+        "refund_cents": 4000
+      }
+    },
+    "rejected-dedup.csv": {
+      "fixture_verdict": "reject",
+      "reason": "source_rows_removed",
+      "rows": 5,
+      "retained_source_data_rows": [
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "source_relative_order_preserved": true,
+      "retained_values_unchanged": true,
+      "totals": {
+        "gross_cents": 49000,
+        "refund_cents": 3000
+      }
+    },
+    "rejected-values.csv": {
+      "fixture_verdict": "reject",
+      "reason": "field_values_changed_despite_same_rows_and_totals",
+      "rows": 7,
+      "totals": {
+        "gross_cents": 67000,
+        "refund_cents": 4000
+      },
+      "exact_changes": [
+        {
+          "source_data_row": 1,
+          "field": "gross_cents",
+          "original": 10000,
+          "candidate": 10100,
+          "delta": 100
+        },
+        {
+          "source_data_row": 2,
+          "field": "gross_cents",
+          "original": 8000,
+          "candidate": 7900,
+          "delta": -100
+        }
+      ]
+    }
+  },
+  "sha256": {
+    "README.md": "ee0a33f7e04ead56090fe5647a1ff67f524d9d8a1f7392224694b03005baa637",
+    "expected.csv": "54a80aa0c528dc5054d08a3666044a8f4307c404aeebde10597da4878677b0bb",
+    "rejected-dedup.csv": "8272b4186d430a92ffffc17f09cfd26832d45e8b8732d536662dbf561117637d",
+    "rejected-values.csv": "df02bce053342dd9eae0cc3a34d7933019037e02c3c9ae927450867819f9b256",
+    "source.json": "e829da6251ba81ff6354009ce687f20802d172e44d1c870bb540c8550a494163"
+  }
+}

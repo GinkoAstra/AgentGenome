@@ -1,0 +1,4 @@
+customer_id,order_count,gross_cents,refund_cents,net_cents
+C010,2,6000,500,5500
+C011,2,19000,3000,16000
+C012,2,3500,2500,1000

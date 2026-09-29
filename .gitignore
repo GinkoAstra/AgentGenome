@@ -4,3 +4,14 @@ __pycache__/
 *.egg-info/
 runs/
 .DS_Store
+
+.data/
+build/
+dist/
+
+# Local design notes, generated evidence, and scratch artifacts.
+/.workspace/
+
+# Local repository snapshots include .git metadata and stay off the remote.
+/AgentGenome-full.tar.gz
+/AgentGenome-中秋版本.tar.gz
