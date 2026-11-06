@@ -1,0 +1,236 @@
+format: agentgenome-graph-definition/2
+definition_id: pi-clean-and-profile
+base_revision: 0
+description: >-
+  Two declared stages executed by real Pi Workers: clean a messy contact list,
+  then profile the accepted clean rows. Each stage has its own bound
+  review_receipt Checker, which recomputes the business result from frozen
+  inputs instead of trusting the Worker. Business rules live only in the Task
+  definitions and example data; the control plane stays business-agnostic.
+policy: fixed
+budget_limits:
+  max_nodes: 8
+  max_depth: 1
+  max_rounds: 3
+  max_continuations: 2
+  max_inflight_nodes: 1
+  max_provider_calls: 24
+  max_tool_calls: 24
+  run_deadline_seconds: 1800
+input_schema:
+  type: object
+  required: [dataset]
+  properties:
+    dataset:
+      type: object
+      required: [id, sha256, size, media_type]
+      properties:
+        id: {type: string}
+        sha256: {type: string}
+        size: {type: integer, minimum: 0}
+        media_type: {type: string}
+      additionalProperties: false
+  additionalProperties: false
+agents:
+  cleaner:
+    format: agentgenome-agent-definition/1
+    backend_ref: pi
+    instructions: >-
+      Read every frozen input listed in this Node before acting. Produce only
+      the artifact this Node's SOP asks for, publish it with
+      node.publish_artifact and submit exactly one candidate naming the
+      published artifact. Work only from the frozen inputs; do not edit the
+      SOP, other Nodes or another Worker's workspace.
+    tool_profile:
+      tools:
+        - name: node.publish_artifact
+          version: "1"
+          scope: node:self
+        - name: node.submit_candidate
+          version: "1"
+          scope: node:self
+      backend_tools:
+        - read_file
+        - write_file
+  clean-checker:
+    format: agentgenome-agent-definition/1
+    backend_ref: script
+    instructions: >-
+      The trusted program Checker for the cleaning stage. It reads the frozen
+      original input and the bound candidate artifact, recomputes the expected
+      result from the frozen input, compares it with the candidate, and submits
+      exactly one review receipt. It never publishes a candidate of its own.
+    tool_profile:
+      tools:
+        - name: node.submit_review
+          version: "1"
+          scope: review:assigned
+  profiler:
+    format: agentgenome-agent-definition/1
+    backend_ref: pi
+    instructions: >-
+      Read every frozen input listed in this Node before acting. Produce only
+      the artifact this Node's SOP asks for, publish it with
+      node.publish_artifact and submit exactly one candidate naming the
+      published artifact. Work only from the frozen inputs; do not edit the
+      SOP, other Nodes or another Worker's workspace.
+    tool_profile:
+      tools:
+        - name: node.publish_artifact
+          version: "1"
+          scope: node:self
+        - name: node.submit_candidate
+          version: "1"
+          scope: node:self
+      backend_tools:
+        - read_file
+        - write_file
+  profile-checker:
+    format: agentgenome-agent-definition/1
+    backend_ref: script
+    instructions: >-
+      The trusted program Checker for the profiling stage. It reads the frozen
+      accepted clean artifact and the bound candidate artifact, recomputes the
+      expected profile from the frozen clean rows, compares it with the
+      candidate, and submits exactly one review receipt. It never publishes a
+      candidate of its own.
+    tool_profile:
+      tools:
+        - name: node.submit_review
+          version: "1"
+          scope: review:assigned
+tasks:
+  clean-work:
+    format: agentgenome-task-definition/1
+    goal: >-
+      The frozen input is a JSON array of objects with string fields "name" and
+      "email". Clean it with exactly these rules: trim leading and trailing
+      whitespace from both fields; lowercase the email. Drop a row when the
+      trimmed name is empty, the email is empty, the email does not contain
+      exactly one "@", the local part before "@" is empty, the domain after "@"
+      is empty, the domain contains no ".", or any dot-separated label of the
+      domain is empty. In other words a valid email is exactly
+      "<nonempty-local>@<dotted-domain>" where the dotted domain has at least
+      one "." and every label between dots is nonempty. After normalization
+      keep only the first occurrence of each email and drop later duplicates.
+      Preserve the surviving rows in input order. Write clean.json containing
+      {"rows": [{"name": ..., "email": ...}, ...], "audit": {"input_rows": N,
+      "output_rows": M, "invalid_rows": X, "duplicate_rows": Y}}, where N is
+      the source row count, X counts rows dropped as invalid, Y counts valid
+      rows dropped as duplicates, and output_rows + invalid_rows +
+      duplicate_rows = input_rows. Publish clean.json with media type
+      application/json and submit it as the single candidate.
+    agent_ref: cleaner
+    completion_kind: candidate
+    contract:
+      input_schema:
+        type: array
+      output_schema:
+        type: array
+      acceptance: >-
+        The candidate must contain one JSON artifact whose rows are exactly the
+        normalized rows the SOP selects, in source order, and whose audit
+        counters account for every source row.
+  clean-check:
+    format: agentgenome-task-definition/1
+    goal: >-
+      Recompute the cleaning SOP from the frozen original dataset. Compare the
+      candidate clean.json with your recomputation. Accept only when the rows
+      and the audit counters match exactly. Otherwise return verdict revise
+      with feedback naming the specific row or counter that differs.
+    agent_ref: clean-checker
+    completion_kind: review_receipt
+    contract:
+      input_schema:
+        type: array
+      output_schema:
+        type: object
+        required:
+          - candidate_id
+          - candidate_round
+          - verdict
+          - feedback_ref
+        properties:
+          candidate_id:
+            type: string
+          candidate_round:
+            type: integer
+          verdict:
+            type: string
+            enum: [accept, revise, expand]
+          feedback_ref:
+            type: object
+        additionalProperties: false
+      acceptance: >-
+        Return one receipt bound to the exact candidate, with the verdict and
+        concrete evidence from the frozen input actually inspected.
+  profile-work:
+    format: agentgenome-task-definition/1
+    goal: >-
+      The frozen input is the accepted clean.json artifact with fields "rows"
+      and "audit". Profile it with exactly these rules: rows is the number of
+      entries in "rows"; domains maps each normalized domain (the part of the
+      email after "@") to how many rows use it. Write profile.json containing
+      {"rows": N, "domains": {"<domain>": count, ...}}. Publish profile.json
+      with media type application/json and submit it as the single candidate.
+      Do not modify the frozen clean artifact.
+    agent_ref: profiler
+    completion_kind: candidate
+    contract:
+      input_schema:
+        type: array
+      output_schema:
+        type: array
+      acceptance: >-
+        The candidate must contain one JSON artifact whose row count matches the
+        frozen rows and whose domain counts add up to that row count.
+  profile-check:
+    format: agentgenome-task-definition/1
+    goal: >-
+      Recompute the profile from the frozen accepted clean.json artifact.
+      Compare the candidate profile.json with your recomputation. Accept only
+      when the row count and every domain count match exactly. Otherwise
+      return verdict revise with feedback naming the specific counter that
+      differs.
+    agent_ref: profile-checker
+    completion_kind: review_receipt
+    contract:
+      input_schema:
+        type: array
+      output_schema:
+        type: object
+        required:
+          - candidate_id
+          - candidate_round
+          - verdict
+          - feedback_ref
+        properties:
+          candidate_id:
+            type: string
+          candidate_round:
+            type: integer
+          verdict:
+            type: string
+            enum: [accept, revise, expand]
+          feedback_ref:
+            type: object
+        additionalProperties: false
+      acceptance: >-
+        Return one receipt bound to the exact candidate, with the verdict and
+        concrete evidence from the frozen clean rows actually inspected.
+nodes:
+  clean:
+    task_ref: clean-work
+    reviewer_ref: clean-check
+    needs: []
+    inputs:
+      dataset:
+        run_input: dataset
+  profile:
+    task_ref: profile-work
+    reviewer_ref: profile-check
+    needs:
+      - clean
+    inputs:
+      clean:
+        from: clean

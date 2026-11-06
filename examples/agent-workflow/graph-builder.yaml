@@ -1,0 +1,206 @@
+format: agentgenome-graph-definition/2
+definition_id: graph-sop-builder
+description: Create a Graph /2 SOP YAML from confirmed requirements; Teacher performs
+  compiler validation and publication.
+policy: fixed
+budget_limits:
+  max_nodes: 4
+  max_depth: 1
+  max_rounds: 3
+  max_continuations: 2
+  max_inflight_nodes: 1
+  max_provider_calls: 40
+  max_tool_calls: 40
+  run_deadline_seconds: 1800
+input_schema:
+  type: object
+  required:
+  - requirements
+  - guide
+  - template
+  properties:
+    requirements: &id001
+      type: object
+      required:
+      - id
+      - sha256
+      - size
+      - media_type
+      properties:
+        id:
+          type: string
+        sha256:
+          type: string
+        size:
+          type: integer
+          minimum: 0
+        media_type:
+          type: string
+      additionalProperties: false
+    guide: *id001
+    template: *id001
+  additionalProperties: false
+agents:
+  worker:
+    format: agentgenome-agent-definition/1
+    backend_ref: pi
+    instructions: |-
+      You are the SOP builder Worker for graph-sop-builder. Read all three
+      frozen inputs with read_file before acting: the confirmed requirements,
+      sop-guide.md and sop-template.yaml. Those three files are the only source
+      of protocol truth; do not inspect repositories, archived examples or the
+      control plane for rules. Author exactly one complete Graph /2 YAML
+      document named generated-graph.yaml in your workspace with write_file,
+      publish it with node.publish_artifact using media type application/yaml,
+      and submit exactly one candidate naming the complete artifact object that
+      publish returned.
+
+      The YAML must be a full, self-contained agentgenome-graph-definition/2
+      document with format, definition_id, description, policy, budget_limits,
+      input_schema, agents, tasks and nodes. Cover every confirmed requirement
+      (business inputs, outputs and acceptance). Freeze each declared run input
+      in input_schema and bind it in a node; give every Task a concrete,
+      verifiable goal and acceptance; keep node needs acyclic and every alias,
+      needs reference and input binding resolved. Replace every placeholder
+      marker; do not leave partial documents or invented fields.
+
+      Use only capabilities that are actually deployed: control-plane tools
+      node.publish_artifact, node.submit_candidate, node.request_expansion and
+      node.submit_review, and backend tools read_file and write_file. Every
+      Agent must use backend_ref pi; the current host provides only pi, so do
+      not introduce any other backend branch. Do not invent shell, network,
+      web, native subagent, background or other capabilities, and do not add
+      non-empty runtime_options. A new Agent is an inline AgentDefinition plus
+      Task plus Graph entry, never a global CLI or skill installation. Business
+      rules belong in Task goals/acceptance and Agent instructions; do not
+      embed executable code.
+
+      You cannot call validate_definition, publish_definition, create_run or any
+      other Graph tool, and you must not claim that you did. Return only the
+      candidate YAML for independent review. If the frozen requirements still
+      leave a key input, output or acceptance rule ambiguous or missing, do
+      not silently narrow it and do not invent your own standard: state the
+      unresolved requirement explicitly in the graph description so the
+      Checker can return revise for Teacher clarification. Do not add
+      unrequested features.
+    tool_profile:
+      tools:
+      - node.submit_candidate
+      - node.publish_artifact
+      backend_tools:
+      - read_file
+      - write_file
+  checker:
+    format: agentgenome-agent-definition/1
+    backend_ref: pi
+    instructions: |-
+      You are the independent semantic Checker for a generated SOP. Read every
+      frozen input (confirmed requirements, sop-guide.md, sop-template.yaml) and
+      every candidate output with read_file. Recompute the review from those
+      files; never trust the Worker's summary or claims.
+
+      Reject the candidate unless all of these hold:
+      1. Requirement coverage: every confirmed business input, output and
+         acceptance statement appears in the generated graph as a frozen
+         input_schema entry, a node input binding, a produced artifact, or a
+         concrete Task/Agent rule.
+      2. Complete Graph /2 shape: one YAML document with format
+         agentgenome-graph-definition/2 and non-empty agents, tasks and nodes;
+         every node task_ref is a candidate Task and reviewer_ref is a
+         review_receipt Task; needs references declared nodes and is acyclic;
+         inputs bind only declared run inputs or upstream accepted outputs; no
+         placeholder marker, unresolved alias or dangling reference remains.
+      3. Concrete rules: each Task goal and acceptance is specific and
+         checkable from frozen inputs and produced artifacts, not a vague
+         aspiration; each behavior rule in the requirements has a matching
+         instruction or acceptance clause. If the frozen requirements still
+         leave a key acceptance rule ambiguous or missing, do not supply your
+         own standard: return revise and state the unresolved requirement.
+      4. Budgets and policy: budget_limits uses supported keys with plausible
+         non-negative values consistent with the confirmed requirements, and
+         policy is fixed or adaptive as appropriate to the declared nodes.
+      5. Capabilities and tools: only node.publish_artifact,
+         node.submit_candidate, node.request_expansion, node.submit_review and
+         backend tools read_file/write_file appear; every backend_ref is pi;
+         no invented shell, network, web, native subagent or background
+         capability, unsupported required_capabilities or non-empty
+         runtime_options.
+      6. Artifact discipline: exactly one application/yaml artifact,
+         containing only the generated definition with no host paths, secrets
+         or second document. Do not verify or judge the artifact filename; the
+         Worker chooses it and the frozen ArtifactRef carries no original name.
+
+      Submit exactly one node.submit_review receipt bound to the exact
+      candidate_id and candidate_round you reviewed. Verdict accept only when
+      every check above passes; otherwise revise and name the concrete defect
+      and its location. Do not use expand. This is semantic review only: you
+      have no validate_definition, publish_definition or run tools, so do not
+      claim compiler validation, publication or a real model/business run.
+    tool_profile:
+      tools:
+      - node.submit_review
+      backend_tools:
+      - read_file
+tasks:
+  work:
+    format: agentgenome-task-definition/1
+    goal: >-
+      From the three frozen inputs (confirmed requirements, sop-guide.md and
+      sop-template.yaml), author exactly one complete Graph /2 SOP YAML
+      artifact named generated-graph.yaml with media type application/yaml.
+      It must cover the confirmed business inputs, outputs and acceptance,
+      freeze every declared run input, and define inline Agents, Tasks and an
+      acyclic Node graph using only deployed capabilities. Publish that file
+      and submit it as the single candidate; do not execute, validate or
+      publish the generated SOP.
+    agent_ref: worker
+    completion_kind: candidate
+    contract:
+      input_schema:
+        type: array
+      output_schema:
+        type: array
+      acceptance: >-
+        The single candidate artifact is a YAML document with format
+        agentgenome-graph-definition/2 and non-empty agents, tasks and nodes.
+        It contains no placeholder marker and no unresolved alias, needs
+        reference or input binding. Every confirmed requirement is covered by
+        an input_schema entry, node input binding, Task rule or concrete
+        acceptance clause. No ambiguous or missing acceptance rule is silently
+        narrowed or replaced by an invented standard; unresolved requirements
+        are reported explicitly. Its tool profiles use only supported
+        control-plane and backend tools with backend_ref pi, declare no
+        invented capability or non-empty runtime_options, and its budgets and
+        policy are concrete and internally consistent.
+  check:
+    format: agentgenome-task-definition/1
+    goal: Review the bound candidate against the acceptance rules.
+    agent_ref: checker
+    completion_kind: review_receipt
+    contract:
+      input_schema:
+        type: array
+      output_schema:
+        type: object
+      acceptance: >-
+        The receipt is bound to the exact candidate and reports all six checks
+        above with concrete evidence from the frozen requirements, guide,
+        template and candidate artifact. It accepts only when requirement
+        coverage, Graph /2 completeness and acyclicity, concrete rules,
+        budgets and policy, capability closure, and artifact discipline all
+        pass; otherwise it returns revise naming the specific defect,
+        location and any unresolved requirement that needs Teacher
+        clarification. It does not claim compiler validation, publication or a
+        real run.
+nodes:
+  main:
+    task_ref: work
+    reviewer_ref: check
+    needs: []
+    inputs:
+      requirements:
+        run_input: requirements
+      guide:
+        run_input: guide
+      template:
+        run_input: template

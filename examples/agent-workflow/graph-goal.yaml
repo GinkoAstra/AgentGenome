@@ -1,0 +1,269 @@
+format: agentgenome-graph-definition/2
+definition_id: pi-research-tutor-evidence
+base_revision: 0
+description: >-
+  A bounded two-stage lesson pipeline over one pinned Markdown file. The quotes
+  stage lets the AI select verbatim evidence; a trusted program verifies exact
+  title, complete and unique source coverage and source correspondence with a
+  Goal progress policy (K=2). The render stage is a trusted program that reads
+  the accepted quotes and the same original notes and emits one deterministic,
+  self-contained lesson.html; a second program recomputes and compares it
+  byte-for-byte. There is no web tool and no claim of open-ended research or
+  argumentative sufficiency.
+policy: fixed
+budget_limits:
+  max_nodes: 8
+  max_depth: 1
+  max_rounds: 3
+  max_continuations: 2
+  max_inflight_nodes: 1
+  max_provider_calls: 30
+  max_tool_calls: 30
+  run_deadline_seconds: 2400
+input_schema:
+  type: object
+  required: [material]
+  properties:
+    material:
+      type: object
+      required: [id, sha256, size, media_type]
+      properties:
+        id: {type: string}
+        sha256: {type: string}
+        size: {type: integer, minimum: 0}
+        media_type: {type: string}
+      additionalProperties: false
+  additionalProperties: false
+agents:
+  quotes-writer:
+    format: agentgenome-agent-definition/1
+    backend_ref: pi
+    instructions: >-
+      Read every frozen input listed in this Node before acting. Select verbatim
+      excerpts from the pinned Markdown file, publish quotes.json with the
+      declared shape, and submit exactly one candidate naming the published
+      artifact. Copy text exactly; do not paraphrase, join non-contiguous text,
+      or invent source ids. There is no network tool.
+    tool_profile:
+      tools:
+        - name: node.publish_artifact
+          version: "1"
+          scope: node:self
+        - name: node.submit_candidate
+          version: "1"
+          scope: node:self
+      backend_tools:
+        - read_file
+        - write_file
+  render-worker:
+    format: agentgenome-agent-definition/1
+    backend_ref: script
+    instructions: >-
+      Trusted deterministic renderer. It reads the accepted quotes and the same
+      original material, validates them, renders the fixed lesson.html template
+      and submits the artifact. It never calls a model and never repairs the
+      quotes stage.
+    tool_profile:
+      tools:
+        - name: node.publish_artifact
+          version: "1"
+          scope: node:self
+        - name: node.submit_candidate
+          version: "1"
+          scope: node:self
+      backend_tools: []
+  script-checker:
+    format: agentgenome-agent-definition/1
+    backend_ref: script
+    instructions: >-
+      Trusted program Checker for the quotes and render stages. It recomputes
+      the declared evidence/render contract from authorized frozen material and
+      submits exactly one review receipt. It never publishes or repairs a Worker
+      artifact and never calls a model.
+    tool_profile:
+      tools:
+        - name: node.submit_review
+          version: "1"
+          scope: review:assigned
+      backend_tools: []
+tasks:
+  quotes-work:
+    format: agentgenome-task-definition/1
+    goal: >-
+      The frozen input is a pinned Markdown file with one H1 title and level-2
+      source sections of the form "## S<n>. <title>". Each section body is
+      citable text. A level-2 heading that does not start with an S id (for
+      example "## Limits") is not a source section. Select, for every real S
+      section, exactly one verbatim contiguous excerpt of at least 20
+      characters from that section's body. Publish quotes.json with exactly this
+      shape: {"title": "<the H1 text without the leading # and surrounding
+      whitespace>", "quotes": [{"source_id": "S1", "quote": "<verbatim excerpt
+      from that section>"}, ...]}. Include exactly one quote for every real S
+      section; order is free. Do not omit, duplicate, invent or cite an unknown
+      source id. Do not rewrite, summarize or join non-contiguous text; copying
+      with different line wrapping is allowed. Publish quotes.json with media
+      type application/json and submit it as the single candidate.
+    agent_ref: quotes-writer
+    completion_kind: candidate
+    progress:
+      no_improvement_limit: 2
+    contract:
+      input_schema:
+        type: array
+        items:
+          type: object
+          required: [id, sha256, size, media_type]
+          properties:
+            id: {type: string}
+            sha256: {type: string}
+            size: {type: integer, minimum: 0}
+            media_type: {type: string}
+          additionalProperties: false
+      output_schema:
+        type: array
+      acceptance: >-
+        The candidate must be exactly one application/json artifact containing
+        one object with a title and a quotes array. The title must equal the
+        material H1 after stripping surrounding whitespace. Every real S
+        section must have exactly one quote, with no missing, duplicate,
+        unknown or invented source id. Each quote's whitespace-normalized text
+        must be a contiguous substring of that section's whitespace-normalized
+        body and at least 20 characters long.
+  quotes-check:
+    format: agentgenome-task-definition/1
+    goal: >-
+      Trusted program review for quotes-work. Read the frozen material and the
+      bound quotes.json. Verify: the JSON is an object with a string title and
+      a quotes array of objects with string source_id and quote; the title
+      equals the material H1 title after stripping surrounding whitespace;
+      every real S section has exactly one quote; there is no unknown source id
+      and no duplicate source id; and each quote's whitespace-normalized text
+      is a contiguous substring of that section's whitespace-normalized body of
+      at least 20 characters. Score one point per validly covered section, one
+      for a correct title and one for a legal JSON structure. The goal is
+      complete legal coverage, no extra/duplicate/wrong items and a correct
+      title and structure. When this review carries a progress policy, compare
+      this candidate with the previous evaluated checkpoint of the same window
+      when the Scheduler supplies readable material: a strictly higher score is
+      improved, otherwise not_improved. Unreadable or unevaluable data is
+      unknown; partial legal JSON is still comparable. Accept only when the
+      goal is complete. Otherwise return verdict revise with feedback naming the
+      specific missing, duplicate, unknown or invalid reference. Do not submit
+      a candidate.
+    agent_ref: script-checker
+    completion_kind: review_receipt
+    contract:
+      input_schema:
+        type: array
+        items:
+          type: object
+          required: [id, sha256, size, media_type]
+          properties:
+            id: {type: string}
+            sha256: {type: string}
+            size: {type: integer, minimum: 0}
+            media_type: {type: string}
+          additionalProperties: false
+      output_schema:
+        type: object
+        required: [candidate_id, candidate_round, verdict, feedback_ref]
+        properties:
+          candidate_id: {type: string}
+          candidate_round: {type: integer}
+          verdict: {type: string, enum: [accept, revise, expand]}
+          feedback_ref: {type: object}
+        additionalProperties: false
+      acceptance: >-
+        Return one receipt bound to the exact candidate with the verdict, the
+        recomputed coverage/score evidence and, when required, one structured
+        progress result.
+  render-work:
+    format: agentgenome-task-definition/1
+    goal: >-
+      The frozen inputs are the accepted quotes.json and the same original
+      Markdown material. Validate the quotes against the material (exact title,
+      exactly one valid excerpt per real S section). Then render lesson.html
+      with the trusted fixed template: an HTML doctype and html lang="en"; a
+      meta charset and inline style; an h1 whose text equals the accepted title;
+      one section per source section in material order, containing an h2 with
+      the source id and section title, a blockquote with the accepted quote and
+      the source id; a Sources heading listing every source id; a statement that
+      the material is static pinned local notes with no web search or online
+      citation; and a final line "Generated from pinned local notes with no web
+      retrieval." The page must have no external stylesheet, script src,
+      @import, url(http...) reference or model call. Publish lesson.html with
+      media type text/html and submit it as the single candidate.
+    agent_ref: render-worker
+    completion_kind: candidate
+    contract:
+      input_schema:
+        type: array
+        items:
+          type: object
+          required: [id, sha256, size, media_type]
+          properties:
+            id: {type: string}
+            sha256: {type: string}
+            size: {type: integer, minimum: 0}
+            media_type: {type: string}
+          additionalProperties: false
+      output_schema:
+        type: array
+      acceptance: >-
+        The candidate must be exactly one text/html artifact that is byte-equal
+        to the deterministic rendering of the accepted quotes and the frozen
+        original material, with no external resources.
+  render-check:
+    format: agentgenome-task-definition/1
+    goal: >-
+      Trusted program review for render-work. Read the frozen original material,
+      the accepted quotes and the bound lesson.html. Recompute the quotes
+      validation and the deterministic rendering from the same material and
+      quotes. Accept only when the candidate is exactly one text/html output
+      and its decoded UTF-8 text equals the recomputed lesson.html exactly.
+      Otherwise return verdict revise with feedback naming the expected and
+      actual sha256 and the first mismatch. Do not submit a candidate.
+    agent_ref: script-checker
+    completion_kind: review_receipt
+    contract:
+      input_schema:
+        type: array
+        items:
+          type: object
+          required: [id, sha256, size, media_type]
+          properties:
+            id: {type: string}
+            sha256: {type: string}
+            size: {type: integer, minimum: 0}
+            media_type: {type: string}
+          additionalProperties: false
+      output_schema:
+        type: object
+        required: [candidate_id, candidate_round, verdict, feedback_ref]
+        properties:
+          candidate_id: {type: string}
+          candidate_round: {type: integer}
+          verdict: {type: string, enum: [accept, revise, expand]}
+          feedback_ref: {type: object}
+        additionalProperties: false
+      acceptance: >-
+        Return one receipt bound to the exact candidate with the verdict and
+        the expected/actual rendering evidence.
+nodes:
+  quotes:
+    task_ref: quotes-work
+    reviewer_ref: quotes-check
+    needs: []
+    inputs:
+      material:
+        run_input: material
+  render:
+    task_ref: render-work
+    reviewer_ref: render-check
+    needs:
+      - quotes
+    inputs:
+      material:
+        run_input: material
+      quotes:
+        from: quotes

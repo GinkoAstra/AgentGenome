@@ -1,0 +1,8 @@
+[
+  {"name":" Alice ","email":" ALICE@EXAMPLE.COM "},
+  {"name":"Alice duplicate","email":"alice@example.com"},
+  {"name":" Bob ","email":"bob@example.com"},
+  {"name":"Blank","email":""},
+  {"name":" Carol ","email":"CAROL@example.com"},
+  {"name":"Invalid","email":"bad-address"}
+]

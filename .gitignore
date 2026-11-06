@@ -1,17 +1,32 @@
+# Python environments and build output
 .venv/
 __pycache__/
-*.pyc
+*.py[cod]
 *.egg-info/
-runs/
-.DS_Store
-
-.data/
 build/
 dist/
-
-# Local design notes, generated evidence, and scratch artifacts.
-/.workspace/
-
-# Local repository snapshots include .git metadata and stay off the remote.
-/AgentGenome-full.tar.gz
-/AgentGenome-中秋版本.tar.gz
+.pytest_cache/
+.coverage
+htmlcov/
+# Local editor / agent state and historical workspaces
+.qoder/
+.codex/
+.pi/
+.article/
+.workspace/
+.refactor/
+.architecture-lens/
+# Runtime state, credentials, local exports
+.agentgenome/
+.data/
+runs/
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store

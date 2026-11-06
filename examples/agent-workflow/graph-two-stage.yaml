@@ -1,0 +1,88 @@
+format: agentgenome-graph-definition/2
+definition_id: two-stage-clean
+base_revision: 0
+description: >-
+  Two declared stages: extract the dataset, then transform the accepted
+  extraction. Each stage has its own declared review_receipt Checker.
+policy: fixed
+budget_limits:
+  max_nodes: 8
+  max_depth: 1
+  max_rounds: 3
+  max_continuations: 2
+input_schema:
+  required:
+    - dataset
+agents:
+  doer:
+    format: agentgenome-agent-definition/1
+    backend_ref: script
+    instructions: >-
+      Complete only the assigned stage from the frozen input artifacts. Publish
+      verifiable output artifacts and submit exactly one candidate; do not edit
+      the SOP, other Nodes or another Worker's session.
+    tool_profile:
+      tools:
+        - name: node.submit_candidate
+          version: "1"
+          scope: node:self
+        - name: node.publish_artifact
+          version: "1"
+          scope: node:self
+      backend_tools: []
+  judge:
+    format: agentgenome-agent-definition/1
+    backend_ref: script
+    instructions: >-
+      Review exactly the bound candidate and its frozen target inputs. Return
+      one structured receipt bound to that candidate; do not submit a
+      candidate of your own.
+    tool_profile:
+      tools:
+        - name: node.submit_review
+          version: "1"
+          scope: review:assigned
+      backend_tools: []
+tasks:
+  work:
+    format: agentgenome-task-definition/1
+    goal: Produce the stage result from the frozen inputs in this Node.
+    agent_ref: doer
+    completion_kind: candidate
+    contract:
+      input_schema:
+        type: array
+      output_schema:
+        type: array
+      acceptance: >-
+        The output artifacts are complete, reproducible from the frozen inputs
+        and reported with evidence the declared Checker can verify.
+  check:
+    format: agentgenome-task-definition/1
+    goal: Verify the bound candidate against the stage acceptance criteria.
+    agent_ref: judge
+    completion_kind: review_receipt
+    contract:
+      input_schema:
+        type: array
+      output_schema:
+        type: object
+      acceptance: >-
+        Return one receipt that names the exact candidate, the verdict and the
+        evidence actually inspected.
+nodes:
+  extract:
+    task_ref: work
+    reviewer_ref: check
+    needs: []
+    inputs:
+      dataset:
+        run_input: dataset
+  transform:
+    task_ref: work
+    reviewer_ref: check
+    needs:
+      - extract
+    inputs:
+      upstream:
+        from: extract

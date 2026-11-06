@@ -6,20 +6,27 @@ build-backend = "setuptools.build_meta"
 name = "agentgenome"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["PyYAML"]
+dependencies = ["PyYAML", "jsonschema>=4.10,<5", "mcp==2.3.0",
+                "starlette>=0.37", "uvicorn>=0.30"]
 
 [project.scripts]
-agentgenome = "cli:main"
-agentgenome-sop = "sop.cli:main"
+agentgenome = "node_runtime.control_plane.host:main"
+agentgenome-teacherctl = "node_runtime.control_plane.teacher_cli:main"
 
 [tool.setuptools]
-py-modules = ["cli"]
+py-modules = []
 
 [tool.setuptools.packages.find]
-include = ["builder*", "core*", "adapters*", "sop*"]
+# Only the current control plane is packaged. The legacy top-level modules and
+# retired teacher/pi_extension/sop_examples subpackages were archived in R06
+# and are excluded from the wheel; subpackages are limited to the control plane.
+include = ["node_runtime", "node_runtime.control_plane", "node_runtime.control_plane.backends"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Archived implementations and frozen evidence are never default regression inputs.
+norecursedirs = [".workspace", ".refactor", ".architecture-lens", "examples", "build", "dist"]
 
 [tool.setuptools.package-data]
-sop = ["*.mjs", "PROTOCOL.md"]
+"node_runtime.control_plane" = ["*.md", "*.mjs"]
+"node_runtime.control_plane.backends" = ["*.mjs"]
