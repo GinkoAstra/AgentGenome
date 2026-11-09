@@ -10,7 +10,7 @@ dependencies = ["PyYAML", "jsonschema>=4.10,<5", "mcp==2.3.0",
                 "starlette>=0.37", "uvicorn>=0.30"]
 
 [project.scripts]
-agentgenome = "node_runtime.control_plane.host:main"
+agentgenome = "node_runtime.control_plane.cli:main"
 agentgenome-teacherctl = "node_runtime.control_plane.teacher_cli:main"
 
 [tool.setuptools]

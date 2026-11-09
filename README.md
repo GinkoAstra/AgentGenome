@@ -45,7 +45,7 @@ A persistent graph runtime for agent workflows.
 
 流程可以预先定义，也可以在允许的规则内拆分子任务。固定的是任务契约、输入版本和已接受的输出，不要求预先固定全部子任务数量。框架能记录和执行验收协议；验收规则是否充分、业务结论是否正确，仍取决于具体任务设计与证据。
 
-当前主要对话入口是普通 Pi 中的 `/agentgenome`。Teacher 是操作流程的普通 AI loop，通过 MCP 调用同一 API；执行端可以采用不同 Backend。**统一安装和自动配置仍在完善中**，下面给出当前实际可用的源码安装方式。
+当前主要对话入口是普通 Pi 中的 `/agentgenome`。Teacher 是操作流程的普通 AI loop，通过 MCP 调用同一 API；执行端可以采用不同 Backend。统一安装器现在也能为 Codex、Qoder 和 Claude Code 写入原生 MCP 入口与技能，详细步骤与各宿主的验证范围见 [CLI 接入说明](docs/client-access.md)。
 
 ## 一次业务如何完成
 
@@ -71,7 +71,7 @@ A persistent graph runtime for agent workflows.
 
 ## 执行后端与当前支持范围
 
-**对话入口与执行后端可以不同。** Pi 中的 Teacher 负责与用户讨论流程，通过 MCP 操作服务；Backend 负责运行承担具体任务的 Agent。接入 Codex 或 Qoder 执行后端，不代表已经为它们提供了与 Pi 相同的交互插件。
+**对话入口与执行后端可以不同。** Pi 中的 Teacher 负责与用户讨论流程，通过 MCP 操作服务；Backend 负责运行承担具体任务的 Agent。Codex、Qoder 和 Claude Code 现在也有统一安装器生成的原生 MCP/技能入口，但它们没有 Pi 的终端面板插件；接入它们的执行后端与启用它们的对话入口是两件事。
 
 | 后端 | 当前验证范围 |
 | --- | --- |
@@ -86,46 +86,73 @@ CLI 适配复用同一 API、调度器和验收协议。当前只开放任务授
 
 ## 开始使用
 
-### 1. 安装并接入 Pi
+安装和服务部署各做一次；日常使用从打开客户端并激活开始。全新环境按第 1 → 2 → 3 节执行；如果本机已经有 AgentGenome 服务在运行，可以跳过第 2 节。
 
-下面是当前的源码安装流程，只需安装运行依赖，使用前不需要安装 pytest 或运行开发测试。统一安装与自动配置仍是后续工作。
+### 1. 一次性安装
 
-在取得源码后进入仓库根目录。需要 **Python 3.11+**，以及已安装、已配置模型的 **[Pi CLI](https://github.com/earendil-works/pi/tree/main/packages/coding-agent)**（`@earendil-works/pi-coding-agent`）。本次回归使用 Pi `1.5.0`、Node.js `22.22.2`，包含真实 RPC 接入检查；终端面板的历史界面验证使用 Pi `0.87.1`。
+需要 **Node.js 20+**，以及已经安装并配置好自身模型的宿主 CLI（Pi、Codex、Qoder 或 Claude Code）。安装器会复用本机的 [uv](https://docs.astral.sh/uv/)；只有 uv 不存在时才需要 `curl` 下载固定版本的 uv。它不会修改 shell 配置文件。
+
+npm 包目前**没有发布到 npm registry**。在仓库根目录用本地包运行：
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
+npm exec --package=. -- agentgenome-setup --client pi
+```
 
-# 替换为你已经在 Pi 中配置好的 provider 与 model。
-.venv/bin/python -m node_runtime.control_plane.pi_integration install \
+这条命令准备隔离的 uv tool 环境，以非可编辑方式安装 Python 运行时，再把所选客户端的原生入口交给同一个共享安装器。它**不启动服务**，也不配置 Worker／Checker 模型或凭据。入口绑定 uv tool 环境的持久解释器，不依赖 npm 缓存或源码目录；删除 npm 缓存后客户端仍可启动。
+
+安装成功后，安装器会打印 `Native entry` 和 `Console` 的绝对路径。如果 `agentgenome` 不在 `PATH`，后续命令直接使用这个 `Console` 路径；不需要修改 shell 配置文件。
+
+可以直接从 GitHub 分支 `feat/unified-client-access` 运行同一个安装器（仍然不是 registry 发布）：
+
+```bash
+npm exec --yes \
+  --package=https://codeload.github.com/GinkoAstra/AgentGenome/tar.gz/refs/heads/feat/unified-client-access \
+  -- agentgenome-setup --client pi
+```
+
+把 `--client pi` 换成 `codex`、`qoder` 或 `claude`。需要隔离安装时追加 `--config-root PATH`、`--data-dir PATH`；只查看计划而不下载或写入：
+
+```bash
+npm exec --package=. -- agentgenome-setup --client pi --dry-run
+```
+
+更新时重新运行同一条安装命令（内部使用 `--reinstall`），不需要 PyPI 发布。
+
+### 2. 一次性部署服务（选择一种后端）
+
+客户端只连接已经运行的本机服务，不会自动启动。另开终端，选择**一种**执行后端；如果本机已有 AgentGenome 服务在运行，跳过本节。
+
+**Pi 后端**（主要对话入口；以下参数只用于服务端的 Worker 与语义 Checker）：
+
+```bash
+agentgenome start --backend pi \
   --provider YOUR_PROVIDER --model YOUR_MODEL
 ```
 
-安装器仅在 Pi 的 Agent 目录写入自有扩展 `extensions/agentgenome.js`，不修改模型凭据。该入口绑定安装时的 Python 环境和源码位置，移动仓库或环境后需要重装。
-
-这里的模型参数用于服务端 **Worker 和语义 Checker**；你当前 Pi 对话使用的模型保持原样。程序 Checker 不调用模型。
-
-### 2. 在普通 Pi 中启用
-
-在任意可写项目目录启动一个新的 Pi 窗口：
+**Codex / Qoder / Claude 后端**（使用该 CLI 自己的配置与默认模型；`--provider` 会被拒绝）：
 
 ```bash
-pi
+agentgenome start --backend codex
+agentgenome start --backend qoder
+agentgenome start --backend claude
 ```
 
-输入：
+需要覆盖模型或指定隔离目录时，可追加 `--model`、`--data-dir`、`--executable`；CLI 后端还接受 `--config-dir`。这些是服务端部署参数，不改变客户端会话使用的模型。为隔离工具权限，CLI 适配器不会完整继承 CLI 的 hooks、插件与 MCP 配置；Codex 的用户 `config.toml` 也被排除，因此其中的自定义 provider 配置目前不能直接复用。
 
-```text
-/agentgenome
-```
+### 3. 打开客户端并激活
 
-然后直接描述业务，例如：
+日常使用不需要重复安装或部署：打开客户端、激活即可。安装完成后必须新开一个客户端会话，让原生配置和技能加载；不能在已打开的窗口中热装：
 
-> 帮我创建一个处理客户名单的 SOP。先和我确认输入格式、去重规则、输出文件与验收条件，再生成 YAML、校验并发布。执行前先展示确认后的流程。
+| 客户端 | 激活方式 | 说明 |
+| --- | --- | --- |
+| Pi | 新 Pi 窗口输入 `/agentgenome` | 使用 Pi 原生命令，不额外安装重复技能 |
+| Codex | 输入 `$agentgenome` 或 `/skills` | Codex 中不使用 `/agentgenome` 斜杠命令 |
+| Qoder | 新会话输入 `/agentgenome` | 使用原生技能与 MCP 入口 |
+| Claude Code | 新会话输入 `/agentgenome` | 正常启动，不使用 `--bare` |
 
-首次启用会连接或启动本机常驻 API 服务。草稿保存在当前工作目录；默认持久数据保存在 `$XDG_STATE_HOME/agentgenome/default`，未设置时为 `~/.local/state/agentgenome/default`。多个工作目录共享这一默认服务。
+安装只写入各宿主的原生入口；真实调用验证与边界见 [CLI 接入说明](docs/client-access.md)。
 
-### 3. 观察与继续
+### 4. 观察与继续
 
 | Pi 操作 | 效果 |
 | --- | --- |
@@ -136,22 +163,6 @@ pi
 | `/agentgenome off` | 关闭本会话模式；后台服务与任务继续运行 |
 
 退出 Pi 也不会停止服务。需要暂停或取消业务时，让 Teacher 对指定 Run 调用控制工具，并核对返回状态。完整操作见 [Pi 接入说明](docs/pi-extension.md)。
-
-### 4. 可选：部署 CLI 执行后端
-
-已完成 Python 包安装，并为所选 CLI 配置好认证后，可以启动单独的服务。以下示例使用 Codex；模型名称及配置目录需替换为实际值：
-
-```bash
-.venv/bin/agentgenome serve \
-  --data-dir "$HOME/.local/state/agentgenome/codex" \
-  --backend codex \
-  --model YOUR_MODEL \
-  --config-dir "$HOME/.codex"
-```
-
-`serve` 在前台运行。将 `--backend` 换成 `qoder` 或 `claude` 时，也应更换对应的模型与配置目录；可用 `--executable` 指定 CLI 路径。Graph 的 Agent 定义通过 `backend_ref` 引用服务注册的后端。这个独立服务不会自动替换 Pi 默认连接的服务。
-
-CLI 后端不使用 Pi 的 `--provider`。为隔离工具权限，适配器不会完整继承 CLI 的 hooks、插件与 MCP 配置；Codex 的用户 `config.toml` 也被排除，因此其中的自定义 provider 配置目前不能直接复用。模型连接配置复用与安装简化仍需继续完善。
 
 ## 系统结构
 
@@ -207,19 +218,22 @@ ScriptBackend 在服务内运行显式加载的可信程序；它不是独立数
 ## 开发与测试
 
 ```bash
-.venv/bin/python -m pip install pytest
-.venv/bin/python -m pytest tests/control_plane -q
+uv run --with pytest python -m pytest tests/control_plane -q
+node --test tests/install/setup.test.mjs
 ```
 
-测试覆盖协议、权限、版本、持久化、父子任务、返工、预算、服务通信与 trace。Node.js 用于 JavaScript 探针；实际 Pi RPC 测试需要本机 Pi，缺失时相应测试跳过。测试使用隔离目录和受控执行，不调用付费模型。业务模型的效果需要另行运行示例、检查接受的产物。
+测试覆盖协议、权限、版本、持久化、父子任务、返工、预算、服务通信与 trace。Node 测试覆盖 npm 一次性安装器的参数、uv 引导、退出码、持久入口（不向共享安装器传递解释器）与打包内容。Node.js 也用于 JavaScript 探针；实际 Pi RPC 测试需要本机 Pi，缺失时相应测试跳过。测试使用隔离目录和受控执行，不调用付费模型。业务模型的效果需要另行运行示例、检查接受的产物。
 
 ```text
+bin/setup.mjs                 npm 一次性安装器（uv + 原生入口）
 node_runtime/control_plane/   唯一运行实现
   backends/                  Pi / CLI / Script 适配器与 Pi 扩展
 examples/agent-workflow/      可公开的 SOP、输入与程序 Checker
 tests/control_plane/         当前实现的回归测试与探针
+tests/install/               npm 安装器的聚焦测试
 docs/                       使用与架构文档
 pyproject.toml               Python 包、依赖与命令入口
+package.json                 npm bin、Node 版本与打包文件白名单
 uv.lock                     已解析的依赖版本
 ```
 

@@ -1,40 +1,57 @@
-"""Install the ordinary-Pi command entry and prepare its existing control plane.
+"""Install the ordinary-Pi command entry and prepare its client attachment.
 
-Only this integration owns bootstrap files. Runtime semantics remain in Host,
-Teacher and MCP. No model credentials belong in generated bootstrap files.
+Install/uninstall delegate to the shared managed-file engine in
+:mod:`client_install`; this module keeps only the Pi compatibility entry plus
+service preparation. Runtime semantics remain in the running service, MCP and
+the Teacher extension. No model, credential, database or service is created.
 
 Commands:
-    install    write <agent-dir>/extensions/agentgenome.js for this package
-    uninstall  remove only that owned file
-    prepare    prepare Teacher files, start/reuse the Host and return Pi config
+    install    preview/apply <agent-dir>/extensions/agentgenome.js
+    uninstall  remove only the owned, unmodified extension and record
+    prepare    discover an existing service and return the Pi session payload
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
-import shlex
-import stat
-import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
-from . import discovery, teacher_entry
-from .http_api import PUBLIC_OPERATIONS as TOOL_NAMES
+from . import client_install, discovery, teacher_entry
+from .client_access import ServiceUnavailableError
+from .client_entries import (PI_COMMAND, PI_OWNER_MARKER as OWNER_MARKER,
+                             plan_install as plan_native_install)
 from .resources import ControlPlaneError
 
 INSTALL_FORMAT = "agentgenome-pi-install/1"
-COMMAND_CONFIG_FORMAT = "agentgenome-pi-command/1"
-OWNER_MARKER = "agentgenome-pi-integration/1"
-EXTENSION_NAME = "agentgenome.js"
-PI_COMMAND = Path(__file__).with_name("backends") / "pi_command.mjs"
 
 
-def _text(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ControlPlaneError("invalid_argument", f"{field} must be a nonempty string")
-    return value.strip()
+class PiInstallPlan(TypedDict):
+    """One extension file; a preview is read-only and contains no credential."""
+    target: str
+    content: str
+    state: Literal["create", "unchanged", "update", "conflict"]
+    previous_sha256: str | None
+
+
+class PreparedPiSession(TypedDict):
+    """Discovery payload, not registration: the live MCP bridge owns attachment.
+
+    mcp_config contains credentials for IPC only; never persist/log this payload.
+    service_id anchors a deliberate attachment; instance_id may change on restart.
+    """
+    prompt: str
+    workspace: str
+    data_dir: str
+    endpoint: str
+    service_id: str
+    instance_id: str | None
+    mcp_config: str
+    host_status: dict[str, Any]
+    tool_names: list[str]
 
 
 def default_agent_dir() -> Path:
@@ -56,245 +73,264 @@ def _python() -> str:
     return os.path.abspath(sys.executable)
 
 
-def _bootstrap_text(*, provider: str, model: str) -> str:
-    if not PI_COMMAND.is_file():
-        raise ControlPlaneError(
-            "not_found", "shipped pi_command.mjs is missing", path=str(PI_COMMAND))
-    options = json.dumps({
-        "format": COMMAND_CONFIG_FORMAT,
-        "python": _python(),
-        "provider": provider,
-        "model": model,
-    }, ensure_ascii=False, indent=2, sort_keys=True)
-    # A managed marker makes ownership explicit: install never overwrites a
-    # file written by another tool, and uninstall never deletes one. The bare
-    # pi-tui import resolves through Pi's extension loader alias, so the trace
-    # panel uses the official width helpers without a machine-specific path.
-    return (
-        f"// {OWNER_MARKER} managed by node_runtime.control_plane.pi_integration; "
-        "do not edit.\n"
-        "import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "
-        "\"@earendil-works/pi-tui\";\n"
-        f"import createExtension from {json.dumps(str(PI_COMMAND.resolve()))};\n\n"
-        "export default (pi) => createExtension(pi, {\n"
-        f"  ...{options},\n"
-        "  helpers: { truncateToWidth, visibleWidth, wrapTextWithAnsi },\n"
-        "});\n"
-    )
-
-
-def _owned_regular_file(path: Path) -> str | None:
-    """Return the current text when the target is a plain file we own."""
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        return None
-    if stat.S_ISLNK(info.st_mode):
-        raise ControlPlaneError(
-            "invalid_argument", "refusing to follow a symlinked extension path",
-            path=str(path))
-    if not stat.S_ISREG(info.st_mode):
-        raise ControlPlaneError(
-            "invalid_argument", "extension path is not a regular file",
-            path=str(path))
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        raise ControlPlaneError(
-            "invalid_argument", "extension file is not readable UTF-8 text",
-            path=str(path)) from error
-    if OWNER_MARKER not in text:
-        raise ControlPlaneError(
-            "invalid_argument",
-            "extension file is not owned by this installer; refusing to overwrite",
-            path=str(path))
-    return text
-
-
-def install(*, provider: str, model: str,
-            agent_dir: str | Path | None = None) -> dict[str, Any]:
-    provider = _text(provider, "provider")
-    model = _text(model, "model")
+def _engine_target(agent_dir: str | Path | None,
+                   data_dir: str | Path | None) -> client_install.InstallTarget:
     root = _resolve_agent_dir(agent_dir)
-    extensions = root / "extensions"
-    target = extensions / EXTENSION_NAME
-    text = _bootstrap_text(provider=provider, model=model)
+    chosen_data = (discovery.resolve_data_dir(data_dir)
+                   if data_dir is not None else None)
+    return client_install.InstallTarget("pi", root, _python(), chosen_data)
 
-    current = _owned_regular_file(target)
-    if current == text:
-        state = "unchanged"
-    else:
-        state = "updated" if current is not None else "created"
-        try:
-            extensions.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-            temporary.write_text(text, encoding="utf-8")
-            os.replace(temporary, target)
-        except OSError as error:
-            raise ControlPlaneError(
-                "internal", "cannot write the Pi extension bootstrap",
-                path=str(target), error=repr(error)) from error
 
+def _pi_state(plan: client_install.InstallPlan, previous: str | None,
+              changed: bool) -> Literal["create", "unchanged", "update", "conflict"]:
+    if plan.state == "conflict":
+        return "conflict"
+    if not changed:
+        return "unchanged"
+    return "create" if previous is None else "update"
+
+
+def _native_plan(target: client_install.InstallTarget):
+    record, error = client_install.installed_record(target.config_root,
+                                                    target.client_kind)
+    if error is not None:
+        raise ControlPlaneError("invalid_argument", error,
+                                path=str(client_install.record_path(
+                                    target.config_root, target.client_kind)))
+    return plan_native_install(target, record)
+
+
+def plan_install(*, agent_dir: str | Path | None = None,
+                 data_dir: str | Path | None = None) -> PiInstallPlan:
+    """Build a no-write plan without connecting to or starting any service.
+
+    The shared engine owns the plan, record and conflict rules; this wrapper
+    keeps the historical Pi payload shape for existing callers.
+    """
+    target = _engine_target(agent_dir, data_dir)
+    native = _native_plan(target)
+    plan = client_install.plan_install(target)
     return {
+        "target": str(native.path),
+        "content": native.content or "",
+        "state": _pi_state(plan, native.before_sha256, native.changed),
+        "previous_sha256": native.before_sha256,
+    }
+
+
+def install(*, provider: str | None = None, model: str | None = None,
+            agent_dir: str | Path | None = None,
+            data_dir: str | Path | None = None,
+            dry_run: bool = False) -> dict[str, Any]:
+    """Apply the shared installation plan; legacy provider/model are ignored."""
+    ignored = [name for name, value in
+               (("provider", provider), ("model", model)) if value is not None]
+    target = _engine_target(agent_dir, data_dir)
+    plan = client_install.plan_install(target)
+    native = _native_plan(target)
+    baseline = {
         "ok": True,
         "format": INSTALL_FORMAT,
-        "state": state,
-        "agent_dir": str(root),
-        "extension": str(target),
+        "state": _pi_state(plan, native.before_sha256, native.changed),
+        "agent_dir": str(target.config_root),
+        "extension": str(native.path),
+        "record": str(client_install.record_path(target.config_root, "pi")),
         "python": _python(),
-        "provider": provider,
-        "model": model,
+        "data_dir": str(target.data_dir) if target.data_dir is not None else None,
+        "dry_run": dry_run,
+        "ignored_legacy": ignored,
     }
+    if plan.state == "conflict":
+        if dry_run:
+            baseline["previous_sha256"] = native.before_sha256
+            return baseline
+        raise ControlPlaneError(
+            "invalid_argument",
+            "the Pi extension is foreign, user-modified or a legacy install; "
+            "refusing to overwrite it. Remove it deliberately, then reinstall.",
+            path=str(native.path), conflicts=list(plan.conflicts))
+    baseline["previous_sha256"] = native.before_sha256
+    if not dry_run:
+        client_install.apply_plan(plan)
+    return baseline
 
 
 def uninstall(*, agent_dir: str | Path | None = None) -> dict[str, Any]:
-    root = _resolve_agent_dir(agent_dir)
-    target = root / "extensions" / EXTENSION_NAME
-    current = _owned_regular_file(target)
-    if current is None:
-        return {
-            "ok": True,
-            "format": INSTALL_FORMAT,
-            "removed": False,
-            "reason": "not_installed",
-            "agent_dir": str(root),
-            "extension": str(target),
-        }
-    try:
-        target.unlink()
-    except OSError as error:
-        raise ControlPlaneError(
-            "internal", "cannot remove the Pi extension bootstrap",
-            path=str(target), error=repr(error)) from error
-    return {
+    target = _engine_target(agent_dir, None)
+    native = _native_plan(target)
+    plan = client_install.plan_uninstall(target)
+    payload: dict[str, Any] = {
         "ok": True,
         "format": INSTALL_FORMAT,
-        "removed": True,
-        "agent_dir": str(root),
-        "extension": str(target),
+        "agent_dir": str(target.config_root),
+        "extension": str(native.path),
     }
+    if plan.state == "conflict":
+        raise ControlPlaneError(
+            "invalid_argument",
+            "the Pi extension is foreign, user-modified or a legacy install; "
+            "refusing to remove it",
+            path=str(native.path), conflicts=list(plan.conflicts))
+    existed = native.before_sha256 is not None
+    client_install.apply_plan(plan)
+    payload.update({"removed": existed,
+                    "reason": "uninstalled" if existed else "not_installed"})
+    return payload
 
 
-def _host_block(data_dir: Path) -> str:
+def _replace_once(text: str, old: str, new: str) -> str:
+    if old not in text:
+        raise ControlPlaneError(
+            "internal",
+            "the Teacher prompt template changed; the slash overlay cannot apply",
+            fragment=old[:120])
+    return text.replace(old, new, 1)
+
+
+def _service_boundary(data_dir: Path) -> str:
+    return (
+        "- 本 Pi 会话的模型、provider 与工具权限保持用户原有设置；"
+        "/agentgenome 不修改它们。\n"
+        "- Worker 模型与 Backend 由本机部署者单独配置；本入口不读取、不写入，"
+        "也不要求与会话模型一致。\n"
+        "- AgentGenome 服务由部署者单独启动和维护；本入口只通过 MCP 连接"
+        "已运行的服务，不会自动 start，也不会创建数据目录。\n"
+        "- 工具返回服务不可达时，如实告知用户需要单独启动/维护服务；"
+        "不要用 bash 自动 start 或另建数据目录。\n"
+        f"- 所有 Graph 工具都通过服务端点绑定同一个数据目录（{data_dir}），"
+        "不要尝试切换。\n"
+    )
+
+
+def _legacy_host_block(data_dir: Path) -> str:
     return (
         "- 提交 run 之前，先用 bash 执行\n"
         f'  agentgenome status --data-dir "{data_dir}"\n'
         '  并检查 JSON 的 "running" 为 true。若为 false，执行\n'
         f'  agentgenome start --data-dir "{data_dir}"\n'
         "  再 status 确认 running 后才提交 run；不要要求用户另开终端或手工执行底层命令。\n"
+        "- 若 start 返回 host_config_mismatch，说明已有 host 按不同配置运行："
+        "保留并复用现有 host，把差异报告给用户，不要停止它。\n"
+        f"- 所有 Graph 工具都通过服务端点绑定同一个数据目录（{data_dir}），"
+        "不要尝试切换。\n"
     )
 
 
-def _host_command(data_dir: Path, *, provider: str, model: str,
-                  start: bool) -> str:
-    argv = [
-        _python(), "-m", "node_runtime.control_plane.host",
-        "start" if start else "status", "--data-dir", str(data_dir),
-    ]
-    if start:
-        argv.extend(["--backend", "pi", "--provider", provider,
-                     "--model", model])
-    # Quote every argument, including the Python path and user-provided data
-    # directory/provider/model, so spaces and shell metacharacters stay literal.
-    return shlex.join(argv)
+def _slash_prompt(data_dir: Path, workspace: Path) -> str:
+    """Render the Teacher rules for an ordinary Pi session without writing.
 
-
-def _slash_prompt(paths: dict[str, Path], *, provider: str, model: str) -> str:
-    """Reuse the Teacher template, fixing only the slash-entry environment.
-
-    The ordinary Pi session keeps its native cwd, so workspace files need
-    absolute paths while ``definition_path`` stays workspace-relative. Host
-    management names the installed Python explicitly instead of relying on an
-    activated virtual environment's PATH.
+    The Teacher CLI still ships sop-guide.md/sop-template.yaml next to a
+    workspace; the slash entry has no workspace-write step, so the same Graph
+    constraints are embedded in this prompt instead of being removed.
     """
-    data_dir = paths["root"]
-    workspace = paths["workspace"]
-    prompt = teacher_entry.PROMPT.format(data_dir=data_dir, workspace=workspace)
-    status_command = _host_command(data_dir, provider=provider, model=model,
-                                   start=False)
-    start_command = _host_command(data_dir, provider=provider, model=model,
-                                  start=True)
-    replacement = (
-        "- 提交 run 之前，先用 bash 执行\n"
-        f"  {status_command}\n"
-        '  并检查 JSON 的 "running" 为 true。若为 false，执行\n'
-        f"  {start_command}\n"
-        "  再 status 确认 running 后才提交 run；不要要求用户另开终端或手工执行底层命令。\n"
-    )
-    if _host_block(data_dir) in prompt:
-        prompt = prompt.replace(_host_block(data_dir), replacement)
+    prompt = teacher_entry.render_prompt(data_dir=data_dir, workspace=workspace)
+    prompt = _replace_once(prompt, _legacy_host_block(data_dir),
+                           _service_boundary(data_dir))
+    prompt = _replace_once(
+        prompt,
+        f"- 通用协议参考: {workspace}/sop-guide.md（随安装分发，先读它；"
+        "字段、委托、reviewer 与提交协议都以它和模板为准）。",
+        "- 通用协议参考: 本提示末尾的《Graph SOP 通用协议参考》"
+        "（随 /agentgenome 内嵌分发；字段、委托、reviewer 与提交协议都以它和模板为准）。")
+    prompt = _replace_once(
+        prompt,
+        f"- 模板: {workspace}/sop-template.yaml（可 validate 的结构骨架，"
+        "把 TODO 换成业务内容）。",
+        "- 模板: 本提示末尾的《Graph SOP 模板》"
+        "（可 validate 的结构骨架，把 TODO 换成业务内容）。")
+    prompt = _replace_once(
+        prompt,
+        "2. 读 sop-guide.md 和 sop-template.yaml，用 edit/write",
+        "2. 按本提示末尾的协议参考与模板，用 edit/write")
+    guide = _replace_once(
+        teacher_entry.GUIDE,
+        "写 YAML 时以本文件 + sop-template.yaml 为准",
+        "写 YAML 时以本协议参考和末尾模板为准")
+    guide = _replace_once(
+        guide,
+        "1. 复制 sop-template.yaml 为 sop.yaml，用 edit/write",
+        "1. 按本提示末尾的《Graph SOP 模板》写出 sop.yaml，用 edit/write")
     prompt += f"""
 ## 斜杠入口环境（本会话，优先于上面的环境说明）
 - 本会话由用户在普通 Pi 工作目录中运行 /agentgenome 激活；Pi 原生 cwd、模型和工具保持不变。
 - 本地工作区就是当前 cwd {workspace}；Graph YAML、输入文件与 deliveries/ 都放在这里，不同目录使用各自的文件。
 - 所有 cwd 的 /agentgenome 会话共用一个按用户隔离的服务数据目录 {data_dir}；不要把服务状态写入工作区。
 - MCP Graph 工具的 definition_path 按本地工作区解释：传 "sop.yaml" 这样的相对路径，不要把它当整段 YAML 或任意绝对路径；扩展会在本地读取后上传，服务端不读客户端路径。
-- 管理 host 使用本次安装的 Python 绝对路径，不依赖未激活 venv 的 PATH：
-  {status_command}
-  {start_command}
-- prepare 已尝试启动或复用相同参数配置的 host；本次 host_status 是真实结果。若 running 不为 true，先按上面命令处理；遇到 host_config_mismatch 保留现有 host 并把差异报告给用户，不要停止它。
+- 本入口只连接已经运行的 AgentGenome 服务；不自动 start、不创建数据目录、不改变服务模型/后端配置。
+- 服务由部署者单独启动/维护；工具返回服务不可达时，向用户说明需要单独启动服务，不要在 bash 中自动 start 或另建数据目录。
 - 不需要通过全局环境变量传递 MCP 配置；本会话内的 MCP 客户端已经拿到连接参数。
+- 已发布的定义、run 和 trace 保存在服务数据目录中；退出本窗口不会停止服务或正在执行的 run。
+
+## Graph SOP 通用协议参考（内嵌）
+{guide}
+
+## Graph SOP 模板（内嵌）
+{teacher_entry.TEMPLATE}
 """
     return prompt
 
 
-def _first_json(*texts: str) -> dict[str, Any] | None:
-    for text in texts:
-        stripped = text.strip()
-        if not stripped:
-            continue
+def _mcp_tool_names(connection: discovery.Connection) -> list[str]:
+    """Read the live tools/list; no Api/Store/Host import and no local state."""
+    async def collect() -> list[str]:
+        import httpx2
+        import mcp.types as types
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+
+        client = httpx2.AsyncClient(
+            headers={"Authorization": f"Bearer {connection.token}"},
+            timeout=30.0, trust_env=False)
         try:
-            value = json.loads(stripped)
-        except ValueError:
-            continue
-        if isinstance(value, dict):
-            return value
-    return None
+            streams = streamable_http_client(
+                connection.endpoint + "/mcp", http_client=client,
+                terminate_on_close=True)
+            async with streams as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    names: list[str] = []
+                    cursor: str | None = None
+                    while True:
+                        params = (types.PaginatedRequestParams(cursor=cursor)
+                                  if cursor else None)
+                        result = await session.list_tools(params=params)
+                        names.extend(tool.name for tool in result.tools
+                                     if isinstance(tool.name, str))
+                        cursor = result.next_cursor
+                        if not cursor:
+                            return names
+        finally:
+            await client.aclose()
 
-
-def _start_or_reuse_host(data_dir: Path, *, provider: str, model: str
-                         ) -> dict[str, Any]:
-    """Run the launcher in a child process; never construct Host here.
-
-    The launcher only reads records and probes HTTP; the detached service is
-    the only process that opens the database. A configuration mismatch is
-    returned as data, not raised: the existing Host keeps running.
-    """
-    package_root = str(Path(__file__).resolve().parents[2])
-    environment = os.environ.copy()
-    existing = environment.get("PYTHONPATH")
-    environment["PYTHONPATH"] = (
-        package_root if not existing
-        else package_root + os.pathsep + existing)
-    command = [
-        _python(), "-m", "node_runtime.control_plane.host", "start",
-        "--data-dir", str(data_dir), "--backend", "pi",
-        "--provider", provider, "--model", model,
-    ]
     try:
-        done = subprocess.run(command, cwd=package_root, env=environment,
-                              capture_output=True, text=True, timeout=60,
-                              stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return {"ok": False, "error": "host_start_failed",
-                "message": repr(error)}
-    payload = _first_json(done.stdout, done.stderr)
-    if payload is None:
-        return {
-            "ok": False,
-            "error": "host_start_failed",
-            "exit_code": done.returncode,
-            "stdout": done.stdout.strip()[-2000:],
-            "stderr": done.stderr.strip()[-2000:],
-        }
-    return payload
+        return asyncio.run(collect())
+    except Exception as error:
+        raise ControlPlaneError(
+            "internal",
+            "the recorded service did not answer MCP tools/list",
+            data_dir=str(connection.data_dir), error=repr(error)) from error
+
+
+def _mcp_config(connection: discovery.Connection, workspace: Path) -> str:
+    return json.dumps({
+        "format": teacher_entry.MCP_CONFIG_FORMAT,
+        "endpoint": connection.endpoint,
+        "token": connection.token,
+        "workspace": str(workspace),
+        "timeout_ms": 120000,
+    }, ensure_ascii=False, sort_keys=True)
 
 
 def prepare_session(*, data_dir: str | Path | None = None,
                     workspace: str | Path | None = None,
-                    provider: str, model: str) -> dict[str, Any]:
-    provider = _text(provider, "provider")
-    model = _text(model, "model")
+                    provider: str | None = None,
+                    model: str | None = None) -> PreparedPiSession:
+    """Discover an existing service; never create/start one or write locally.
+
+    Legacy provider/model inputs are accepted and ignored; the Pi window model
+    is not a client-install concern.
+    """
+    del provider, model
     try:
         root = discovery.resolve_data_dir(data_dir)
         chosen = (Path(workspace).expanduser().resolve()
@@ -303,33 +339,24 @@ def prepare_session(*, data_dir: str | Path | None = None,
         raise ControlPlaneError(
             "invalid_argument", "service or workspace path cannot be resolved",
             data_dir=str(data_dir), workspace=str(workspace)) from error
-    paths = teacher_entry.prepare(root, chosen)
-    prompt = _slash_prompt(paths, provider=provider, model=model)
-    try:
-        paths["prompt"].write_text(prompt, encoding="utf-8")
-    except OSError as error:
-        raise ControlPlaneError(
-            "internal", "cannot write the prepared Teacher prompt",
-            path=str(paths["prompt"]), error=repr(error)) from error
-    host_status = _start_or_reuse_host(root, provider=provider, model=model)
     try:
         connection = discovery.connection(root)
     except ControlPlaneError as error:
-        raise ControlPlaneError(
-            "service_unavailable",
-            "control-plane service is not reachable; no Teacher activation "
-            "was created",
-            data_dir=str(root), host_status=host_status,
-            error=error.code) from error
+        raise ServiceUnavailableError(error) from error
+    try:
+        tool_names = _mcp_tool_names(connection)
+    except ControlPlaneError as error:
+        raise ServiceUnavailableError(error) from error
     return {
-        "prompt": prompt,
-        "workspace": str(paths["workspace"]),
+        "prompt": _slash_prompt(root, chosen),
+        "workspace": str(chosen),
         "data_dir": str(root),
         "endpoint": connection.endpoint,
-        "mcp_config": teacher_entry.mcp_config(
-            paths, endpoint=connection.endpoint, token=connection.token),
-        "host_status": host_status,
-        "tool_names": list(TOOL_NAMES),
+        "service_id": connection.service_id,
+        "instance_id": connection.instance_id,
+        "mcp_config": _mcp_config(connection, chosen),
+        "host_status": discovery.status(root),
+        "tool_names": tool_names,
     }
 
 
@@ -345,13 +372,17 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     install_parser = sub.add_parser("install")
-    install_parser.add_argument("--provider", required=True,
-                                help="Host Worker provider fixed at install time")
-    install_parser.add_argument("--model", required=True,
-                                help="Host Worker model fixed at install time")
     install_parser.add_argument("--agent-dir", default=None,
                                 help="Pi agent directory (default: "
                                      "$PI_CODING_AGENT_DIR or ~/.pi/agent)")
+    install_parser.add_argument("--data-dir", default=None,
+                                help="optional isolated service data directory")
+    install_parser.add_argument("--dry-run", action="store_true",
+                                help="preview only; write nothing")
+    install_parser.add_argument("--provider", default=None,
+                                help="deprecated and ignored")
+    install_parser.add_argument("--model", default=None,
+                                help="deprecated and ignored")
 
     uninstall_parser = sub.add_parser("uninstall")
     uninstall_parser.add_argument("--agent-dir", default=None)
@@ -361,15 +392,18 @@ def main(argv: list[str] | None = None) -> int:
                                 help="service data directory "
                                      "(default: per-user AgentGenome state)")
     prepare_parser.add_argument("--workspace", default=None,
-                                help="local Teacher workspace (default: cwd)")
-    prepare_parser.add_argument("--provider", required=True)
-    prepare_parser.add_argument("--model", required=True)
+                                help="local Pi workspace (default: cwd)")
+    prepare_parser.add_argument("--provider", default=None,
+                                help="deprecated and ignored")
+    prepare_parser.add_argument("--model", default=None,
+                                help="deprecated and ignored")
 
     args = parser.parse_args(argv)
     try:
         if args.command == "install":
             payload = install(provider=args.provider, model=args.model,
-                              agent_dir=args.agent_dir)
+                              agent_dir=args.agent_dir, data_dir=args.data_dir,
+                              dry_run=args.dry_run)
         elif args.command == "uninstall":
             payload = uninstall(agent_dir=args.agent_dir)
         else:

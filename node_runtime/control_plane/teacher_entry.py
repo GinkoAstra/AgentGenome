@@ -16,7 +16,6 @@ import sys
 from pathlib import Path
 
 from . import discovery
-from .http_api import PUBLIC_OPERATIONS as TOOL_NAMES
 from .resources import ControlPlaneError
 
 MCP_CONFIG_ENV = "AGENTGENOME_TEACHER_MCP"
@@ -118,7 +117,16 @@ TEACHER_BASE_TOOLS = ("read", "bash", "edit", "write")
 
 
 def teacher_tools() -> tuple[str, ...]:
+    # Imported lazily so a client-only module can render the Teacher prompt
+    # without loading http_api/Api through this module's import closure.
+    from .http_api import PUBLIC_OPERATIONS as TOOL_NAMES
     return TEACHER_BASE_TOOLS + tuple(TOOL_NAMES)
+
+
+def render_prompt(*, data_dir: str | Path,
+                  workspace: str | Path) -> str:
+    """Pure prompt rendering: no directory or file is created."""
+    return PROMPT.format(data_dir=Path(data_dir), workspace=Path(workspace))
 
 TEMPLATE = """# Generic Graph /2 SOP template. Fill every TODO before validate.
 # Field reference, runtime protocol and examples: sop-guide.md (same directory).

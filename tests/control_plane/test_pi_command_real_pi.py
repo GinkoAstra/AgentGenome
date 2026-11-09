@@ -1,9 +1,10 @@
 """Real Pi RPC: the installed extension is discovered and activates tools.
 
 This does not use a fake ExtensionAPI. It starts the installed `pi` binary in
-RPC mode with an isolated agent directory and an empty project cwd, asks for
-commands, runs /agentgenome, and reads the real tool registry from a tiny probe
-extension. No model is called and no run is submitted.
+RPC mode with an isolated agent directory and an empty project cwd, starts the
+isolated `script` service the operator would run (prepare is discovery-only),
+asks for commands, runs /agentgenome, and reads the real tool registry from a
+tiny probe extension. No model is called and no run is submitted.
 """
 from __future__ import annotations
 
@@ -80,6 +81,12 @@ def test_real_pi_rpc_sees_the_installed_command(tmp_path):
                 "XDG_CONFIG_HOME": str(tmp_path / "config"),
                 "XDG_CACHE_HOME": str(tmp_path / "cache"),
                 "AGENTGENOME_PROBE_OUT": str(probe_out)})
+    # prepare only discovers; the deployment owner starts the service first.
+    started = subprocess.run(
+        [sys.executable, "-m", "node_runtime.control_plane.host", "start",
+         "--backend", "script"],
+        cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=60)
+    assert started.returncode == 0, started.stderr
     process = subprocess.Popen(
         [pi, "--mode", "rpc", "--no-session", "--offline",
          "--no-context-files", "--no-skills", "--no-prompt-templates",

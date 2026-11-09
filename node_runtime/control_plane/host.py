@@ -32,7 +32,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from . import discovery
 from .api import Api
@@ -1003,9 +1003,7 @@ def _command_stop(args: argparse.Namespace) -> int:
         return 1
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="agentgenome", description=__doc__)
-    sub = parser.add_subparsers(dest="command", required=True)
+def _add_commands(sub: argparse._SubParsersAction) -> None:
     for name, function in (("serve", _command_serve),
                            ("start", _command_start),
                            ("status", _command_status),
@@ -1044,7 +1042,20 @@ def main(argv: list[str] | None = None) -> int:
                       provider=args.provider, model=args.model,
                       session_id=args.session_id, message=message)
     teacher.set_defaults(function=run_teacher)
-    args = parser.parse_args(argv)
+
+
+def _parser(extra: Callable[[argparse._SubParsersAction], None] | None = None
+            ) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agentgenome", description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    _add_commands(sub)
+    if extra is not None:
+        extra(sub)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
     return args.function(args)
 
 

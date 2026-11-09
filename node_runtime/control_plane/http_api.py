@@ -20,6 +20,8 @@ PUBLIC_OPERATIONS = (
     "read_artifact", "create_run", "get_resource", "list_runs",
     "list_resources", "read_events", "get_report", "set_run_intent",
     "read_trace", "read_execution", "read_requests",
+    "get_service_info", "register_client", "unregister_client",
+    "list_definitions",
 )
 
 IDENTITY_FIELDS = frozenset({"actor", "actor_id", "role", "roles"})
@@ -105,7 +107,8 @@ def decode_definition(document: Any = None,
 
 def dispatch(api: Api, actor: Actor, operation: str,
              arguments: Mapping[str, Any],
-             *, trace: Any = None) -> dict[str, Any]:
+             *, trace: Any = None,
+             service_access: Any = None) -> dict[str, Any]:
     """Decode a public operation and return the existing ok/error envelope.
 
     Definition bodies are content (document or explicit YAML text), never a
@@ -122,7 +125,7 @@ def dispatch(api: Api, actor: Actor, operation: str,
         if not isinstance(arguments, Mapping):
             raise ControlPlaneError("invalid_argument",
                                     "request body must be a JSON object")
-        result = _run(api, actor, operation, arguments, trace)
+        result = _run(api, actor, operation, arguments, trace, service_access)
         return ok_envelope(operation, result)
     except ControlPlaneError as error:
         return error_envelope(operation, error)
@@ -136,7 +139,8 @@ def _trace_service(trace: Any) -> Any:
 
 
 def _run(api: Api, actor: Actor, operation: str,
-         arguments: Mapping[str, Any], trace: Any = None) -> Any:
+         arguments: Mapping[str, Any], trace: Any = None,
+         service_access: Any = None) -> Any:
     if operation == "validate_definition":
         _only(arguments, operation, {"document", "definition_text"})
         document = decode_definition(arguments.get("document"),
@@ -235,8 +239,39 @@ def _run(api: Api, actor: Actor, operation: str,
             after=arguments.get("after", 0),
             limit=arguments.get("limit", 100))
 
+    if operation == "get_service_info":
+        _only(arguments, operation, set())
+        return _service_access(service_access).get_service_info(actor)
+
+    if operation == "register_client":
+        _only(arguments, operation,
+              {"client_kind", "client_session_id", "workspace"})
+        return _service_access(service_access).register_client(
+            actor, client_kind=_required(arguments, "client_kind"),
+            client_session_id=_required(arguments, "client_session_id"),
+            workspace=_required(arguments, "workspace"))
+
+    if operation == "unregister_client":
+        _only(arguments, operation, {"client_id"})
+        return _service_access(service_access).unregister_client(
+            actor, client_id=_required(arguments, "client_id"))
+
+    if operation == "list_definitions":
+        _only(arguments, operation, {"query", "limit", "after"})
+        return api.list_definitions(
+            actor, query=arguments.get("query"),
+            limit=arguments.get("limit", 50),
+            after=arguments.get("after"))
+
     raise ControlPlaneError("invalid_argument", "unknown operation",
                             operation=str(operation)[:128])
+
+
+def _service_access(service_access: Any) -> Any:
+    if service_access is None:
+        raise ControlPlaneError(
+            "internal", "service access is not configured for this transport")
+    return service_access
 
 
 def _only(arguments: Mapping[str, Any], operation: str,

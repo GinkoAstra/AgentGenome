@@ -16,6 +16,7 @@
  *   resolved by the Teacher against its own local workspace and uploaded as
  *   `definition_text`; the service never reads a caller-supplied path.
  */
+import { randomUUID } from "node:crypto";
 import {
   readFileSync, realpathSync, statSync,
 } from "node:fs";
@@ -101,6 +102,24 @@ function parseJson(text) {
   } catch {
     return null;
   }
+}
+
+function toolEnvelope(result, operation) {
+  if (result?.isError) {
+    throw fail("mcp_tool_error",
+               textContent(result) || `${operation} returned an error`);
+  }
+  const payload = result?.structuredContent ?? parseJson(textContent(result));
+  if (!payload || typeof payload !== "object") {
+    throw fail("mcp_protocol_error", `${operation} returned no envelope`);
+  }
+  if (payload.ok === false) {
+    const error = payload.error ?? {};
+    throw fail(error.code ?? "tool_failed",
+               error.message ?? `${operation} failed`, error.details);
+  }
+  const value = payload.result;
+  return value && typeof value === "object" ? value : {};
 }
 
 function modelText(payload) {
@@ -346,15 +365,31 @@ class McpSession {
       "tools/call", { name, arguments: arguments_ }, generation);
   }
 
+  async registerClient(clientKind, clientSessionId, workspace,
+                       generation = this.generation) {
+    const result = await this.callTool("register_client", {
+      client_kind: clientKind,
+      client_session_id: clientSessionId,
+      workspace,
+    }, generation);
+    return toolEnvelope(result, "register_client");
+  }
+
+  async unregisterClient(clientId, generation = this.generation) {
+    const result = await this.callTool(
+      "unregister_client", { client_id: clientId }, generation);
+    return toolEnvelope(result, "unregister_client");
+  }
+
   reset() {
     this.ready = false;
     this.sessionId = null;
     this.protocolVersion = null;
   }
 
-  close() {
-    this.generation += 1;
+  disconnect() {
     const sessionId = this.sessionId;
+    this.generation += 1;
     this.reset();
     this.connecting = null;
     if (!sessionId) return;
@@ -366,6 +401,17 @@ class McpSession {
       },
       timeoutMs: 1000,
     }).catch(() => {});
+  }
+
+  reconfigure(config) {
+    // The DELETE must reach the old endpoint with the old token/session, so
+    // disconnect before the new config replaces the one that owns it.
+    this.disconnect();
+    this.config = config;
+  }
+
+  close() {
+    this.disconnect();
   }
 }
 
@@ -488,55 +534,79 @@ function assertNoConflicts(pi, names) {
   if (conflicts.length > 0) throw new ToolNameConflictError(conflicts);
 }
 
+function dedupeTools(offered) {
+  const tools = [];
+  const seen = new Set();
+  for (const tool of offered ?? []) {
+    if (!tool || typeof tool.name !== "string" || seen.has(tool.name)) continue;
+    seen.add(tool.name);
+    tools.push(tool);
+  }
+  return tools;
+}
+
 /**
- * Register every MCP-advertised tool under the Pi tool protocol.
+ * Bind the extension to one live service and register its tools once.
  *
- * `enabled` is evaluated on every execute; while it returns false the tool
- * refuses without touching the MCP session. `sessionShutdown` defaults to
- * true so the default environment-driven path keeps its original lifecycle.
- * `onResult` observes a successful committed result (for example the run this
- * Pi just created); it never changes or delays what the model receives.
- * Returns the registered names and an idempotent close function.
+ * `attach` moves the bridge to a freshly prepared endpoint/token/workspace
+ * and registers this Pi client identity over real MCP. The first successful
+ * attach also lists the real tool set and registers those tools with Pi;
+ * later activations only re-register the client, never the tools. All
+ * lifecycle transitions are serialized so overlapping activations cannot
+ * interleave. `enabled` is evaluated on every execute; while it returns false
+ * the tool refuses without touching the MCP session. `onResult` observes a
+ * successful committed result and never changes or delays what the model
+ * receives. `close` is idempotent and best-effort; it detaches one activation
+ * and leaves the bridge reusable, so a later attach reconnects afresh.
  */
 export async function registerTeacherTools(pi, config, {
   enabled = () => true,
   sessionShutdown = true,
   checkConflicts = true,
   onResult = null,
+  clientKind = "pi",
+  clientSessionId = null,
+  workspace = undefined,
 } = {}) {
-  const normalized = normalizeConfig(config);
-  if (normalized === null) {
+  const initial = normalizeConfig(config);
+  if (initial === null) {
     throw fail("invalid_config", "AgentGenome teacher MCP config is invalid");
   }
 
-  const session = new McpSession(normalized);
-  let offered;
-  try {
-    await session.ensure();
-    offered = await session.listTools();
-  } catch (error) {
-    session.close();
-    throw error;
+  const session = new McpSession(initial);
+  const fallbackSessionId = typeof clientSessionId === "string" && clientSessionId
+    ? clientSessionId : randomUUID();
+  let tools = null;
+  let registered = false;
+  let registration = null;
+  let lastIdentity = {
+    clientSessionId: fallbackSessionId,
+    workspace: workspace ?? initial.workspace ?? "",
+  };
+  let chain = Promise.resolve();
+
+  function serialize(task) {
+    const run = chain.then(task);
+    chain = run.catch(() => {});
+    return run;
   }
 
-  const tools = [];
-  const seen = new Set();
-  for (const tool of offered) {
-    if (!tool || typeof tool.name !== "string" || seen.has(tool.name)) continue;
-    seen.add(tool.name);
-    tools.push(tool);
-  }
-  // Refuse before registering anything: a silent overwrite could shadow a
-  // native or third-party tool of the same name. The load-time teacher path
-  // is an isolated profile where the registry is not yet bound; it opts out.
-  if (checkConflicts) {
-    assertNoConflicts(pi, tools.map((tool) => tool.name));
+  async function unregister(generation) {
+    const clientId = registration;
+    registration = null;
+    if (clientId === null) return;
+    try {
+      await session.unregisterClient(clientId,
+                                     generation ?? session.generation);
+    } catch {
+      // Best effort only: a failed detach must never stop a run, an
+      // execution or the local close.
+    }
   }
 
-  const close = () => session.close();
-
-  try {
-    for (const tool of tools) {
+  function registerToolsOnce() {
+    if (registered) return;
+    for (const tool of tools ?? []) {
       const parameters = advertisedSchema(tool);
       pi.registerTool({
         name: tool.name,
@@ -561,7 +631,8 @@ export async function registerTeacherTools(pi, config, {
                 { tool: tool.name, call_id: String(callId) });
             }
             const result = await session.callTool(
-              tool.name, adaptArguments(tool.name, params, normalized.workspace),
+              tool.name,
+              adaptArguments(tool.name, params, session.config.workspace),
               generation);
             if (generation !== session.generation) {
               return errorResult(
@@ -597,15 +668,79 @@ export async function registerTeacherTools(pi, config, {
         },
       });
     }
-  } catch (error) {
-    close();
-    throw error;
+    registered = true;
+  }
+
+  async function attach(nextConfig, identity = {}) {
+    return serialize(async () => {
+      const normalized = normalizeConfig(nextConfig);
+      if (normalized === null) {
+        throw fail("invalid_config",
+                   "AgentGenome teacher MCP config is invalid");
+      }
+      const sessionId = typeof identity.clientSessionId === "string"
+        && identity.clientSessionId
+        ? identity.clientSessionId : fallbackSessionId;
+      const nextWorkspace = typeof identity.workspace === "string"
+        && identity.workspace.length > 0
+        ? identity.workspace
+        : (normalized.workspace ?? lastIdentity.workspace);
+      if (registration !== null) await unregister(session.generation);
+      session.reconfigure(normalized);
+      try {
+        await session.ensure();
+        if (tools === null) {
+          // Refuse before registering anything: a silent overwrite could
+          // shadow a native or third-party tool of the same name. The
+          // load-time teacher path is an isolated profile whose registry is
+          // not yet bound; it opts out.
+          tools = dedupeTools(await session.listTools());
+          if (checkConflicts) {
+            assertNoConflicts(pi, tools.map((tool) => tool.name));
+          }
+        }
+        const record = await session.registerClient(
+          clientKind, sessionId, nextWorkspace);
+        registration = typeof record?.client_id === "string"
+          ? record.client_id : null;
+        registerToolsOnce();
+      } catch (error) {
+        await unregister(session.generation);
+        session.close();
+        throw error;
+      }
+      lastIdentity = { clientSessionId: sessionId, workspace: nextWorkspace };
+      return {
+        toolNames: (tools ?? []).map((tool) => tool.name),
+        client_id: registration,
+        client_session_id: sessionId,
+        workspace: nextWorkspace,
+      };
+    });
+  }
+
+  function configure(nextConfig) {
+    return attach(nextConfig,
+                  { clientSessionId: lastIdentity.clientSessionId });
+  }
+
+  function close() {
+    return serialize(async () => {
+      await unregister(session.generation);
+      session.close();
+    });
   }
 
   if (sessionShutdown) {
     pi.on("session_shutdown", close);
   }
-  return { toolNames: tools.map((tool) => tool.name), close };
+
+  const handle = { attach, configure, close };
+  Object.defineProperty(handle, "toolNames", {
+    enumerable: true,
+    get: () => (tools ?? []).map((tool) => tool.name),
+  });
+  return handle;
 }
 
 export default async function teacherGraphTools(pi) {
@@ -615,7 +750,9 @@ export default async function teacherGraphTools(pi) {
     // The installed Teacher profile uses --no-extensions and an explicit
     // extension path, so no foreign tool can collide; keep the original
     // load-time behavior instead of requiring a bound runtime.
-    await registerTeacherTools(pi, config, { checkConflicts: false });
+    const bridge = await registerTeacherTools(pi, config,
+                                              { checkConflicts: false });
+    await bridge.attach(config);
   } catch (error) {
     process.stderr.write(
       `agentgenome teacher MCP unavailable: ${String(error?.message ?? error)}\n`);

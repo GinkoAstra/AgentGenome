@@ -2,28 +2,25 @@
 
 [返回首页](../README.md)
 
-## 安装与模型
+## 安装与激活
 
-在仓库根目录执行：
+前提是 **Node.js 20+** 和已经安装、配置好模型的 Pi CLI。npm 包目前**没有发布到 npm registry**；在仓库根目录执行：
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m node_runtime.control_plane.pi_integration install \
-  --provider YOUR_PROVIDER --model YOUR_MODEL
+npm exec --package=. -- agentgenome-setup --client pi
 ```
 
-用已经在本机 Pi 配置的模型替换占位符。安装参数配置后台 Pi Worker 和语义 Checker，不改变普通 Pi 的对话模型。[Pi 安装与配置](https://github.com/earendil-works/pi/tree/main/packages/coding-agent)以其项目文档为准。本次源码回归使用 Pi `1.5.0` / Node.js `22.22.2` 并通过真实 RPC 接入检查；终端面板的历史界面验证使用 Pi `0.87.1`。
+分支 `feat/unified-client-access` 推送后，也可从 GitHub 运行同一个安装器，命令见 [CLI 接入说明](client-access.md)。安装器复用本机 uv；uv 缺失时用 `curl` 下载固定版本的官方 uv，不修改 shell 配置文件。
 
-安装器写入 `~/.pi/agent/extensions/agentgenome.js`；设置 `PI_CODING_AGENT_DIR` 或传入 `--agent-dir` 可选择独立配置目录。它不修改凭据和 `settings.json`，不覆盖没有自有标记的同名扩展。生成的入口引用安装时的 Python 和包路径；移动后重装。
+安装器以非可编辑方式把运行时放进 uv tool 环境，只写入 Pi 扩展 `~/.pi/agent/extensions/agentgenome.js`；设置 `PI_CODING_AGENT_DIR` 或传入 `--config-root` 可选择独立配置目录。它不启动服务、不配置 Worker 或语义 Checker 的模型，也不修改凭据；不会覆盖没有自有标记的同名扩展。入口绑定 uv tool 环境的持久解释器，删除 npm 缓存后仍可使用；更新时重新运行同一条安装命令。安装成功会打印 `Console: /绝对路径/agentgenome`；如果 `agentgenome` 不在 `PATH`，后续命令直接使用这个绝对路径。旧的 `--provider`/`--model` 参数会被接受但忽略。[Pi 安装与配置](https://github.com/earendil-works/pi/tree/main/packages/coding-agent)以其项目文档为准。本次源码回归使用 Pi `1.5.0` / Node.js `22.22.2` 并通过真实 RPC 接入检查；终端面板的历史界面验证使用 Pi `0.87.1`。
 
-安装后打开新的 Pi 窗口，在可写工作目录输入 `/agentgenome`。已有对话上下文、模型和原生工具保留，Graph 工具通过真实 MCP 客户端连接服务。`agentgenome-teacherctl` 只是可选脚本工具，不是 Teacher 的必经层。
+启动服务后，打开新的 Pi 窗口，在可写工作目录输入 `/agentgenome`。已有对话上下文、模型和原生工具保留，Graph 工具通过真实 MCP 客户端连接已经运行的服务。`agentgenome-teacherctl` 只是可选脚本工具，不是 Teacher 的必经层。
 
 ## 草稿和服务状态分别放在哪里
 
 当前目录用于 SOP 草稿。启用时生成通用的 `sop-guide.md` 和 `sop-template.yaml`，Teacher 从这两份文件了解协议。
 
-服务独立常驻，默认数据目录为 `$XDG_STATE_HOME/agentgenome/default`，未设置时为 `~/.local/state/agentgenome/default`。不同 cwd 的 Pi 连接同一个默认实例；首次启用时不存在则自动启动。已有实例的模型 / 后端配置不一致时会报告 `host_config_mismatch`，不会偷偷重启覆盖它。
+服务独立常驻，默认数据目录为 `$XDG_STATE_HOME/agentgenome/default`，未设置时为 `~/.local/state/agentgenome/default`。不同 cwd 的 Pi 连接同一个默认实例；`/agentgenome` 只发现并连接已经运行的服务，不会自动启动。服务未运行时会明确报告不可用，需要先单独部署。客户端不配置或比较服务端 Worker 的模型；部署配置由服务管理。
 
 退出 Pi、切换会话或 `/agentgenome off` 会清理本窗口的连接与面板，后台服务和 Run 继续存在。再次启用后可查询原有 Run。模型凭据沿用 Pi 自己的配置，不写入 Graph YAML。
 
@@ -54,26 +51,26 @@ python3 -m venv .venv
 
 ## 可选的脚本与排障命令
 
-以下命令在仓库根目录执行；也可使用安装环境中的完整可执行路径：
+以下命令直接使用安装器放进 uv tool 环境的持久命令；如果 `agentgenome` 不在 `PATH`，用安装成功时打印的 `Console` 绝对路径代替：
 
 ```bash
-.venv/bin/agentgenome status
-.venv/bin/agentgenome-teacherctl status
-.venv/bin/agentgenome-teacherctl trace RUN_ID
-.venv/bin/agentgenome-teacherctl watch RUN_ID
+agentgenome status
+agentgenome-teacherctl status
+agentgenome-teacherctl trace RUN_ID
+agentgenome-teacherctl watch RUN_ID
 ```
 
-`status` 不会自动创建服务。需要手动启动自己的服务时，模型参数必须与部署配置一致：
+`status` 不会自动创建服务。以下是独立的服务部署步骤，不是客户端安装；需要手动启动自己的服务时，模型参数必须与部署配置一致：
 
 ```bash
-.venv/bin/agentgenome start --backend pi \
+agentgenome start --backend pi \
   --provider YOUR_PROVIDER --model YOUR_MODEL
 ```
 
 `stop` 是服务生命周期操作，与业务暂停或取消不同。只有确实要停止所管理的服务时才执行：
 
 ```bash
-.venv/bin/agentgenome stop
+agentgenome stop
 ```
 
 清洗 / Goal 示例依赖可信程序 Checker，请按 [示例指南](../examples/agent-workflow/README.md) 启动独立实例。普通 `/agentgenome` 安装入口没有程序工厂参数，不能假定它会自动安装这些 Checker。
@@ -81,7 +78,7 @@ python3 -m venv .venv
 卸载 Pi 扩展：
 
 ```bash
-.venv/bin/python -m node_runtime.control_plane.pi_integration uninstall
+agentgenome client uninstall --client pi
 ```
 
 卸载仅删除自有入口，不删除服务数据，也不停止 Run。

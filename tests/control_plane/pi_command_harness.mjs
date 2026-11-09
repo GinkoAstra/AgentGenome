@@ -21,14 +21,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const python = process.env.AGENTGENOME_TEST_PYTHON;
 const extensionPath = process.env.AGENTGENOME_TEST_EXTENSION;
 const root = process.env.AGENTGENOME_TEST_ROOT;
 const xdgState = process.env.XDG_STATE_HOME;
-const PROVIDER = "llama-local";
-const MODEL = "qwen3.5-2b";
 const NATIVE_TOOLS = ["read", "bash", "edit", "write"];
 // The advertised surface belongs to the service, not this harness. Reading it
 // from the shared operation list keeps activation-parity checks correct when
@@ -46,6 +45,8 @@ if (!python || !extensionPath || !root || !xdgState) {
 
 const extensionModule = await import(extensionPath);
 const createExtension = extensionModule.default;
+const { registerTeacherTools } = await import(
+  pathToFileURL(join(dirname(extensionPath), "pi_teacher_tools.mjs")).href);
 const defaultDataDir = join(xdgState, "agentgenome", "default");
 
 const checks = [];
@@ -196,6 +197,8 @@ function fakePrepared(fake, dataDir, workspace) {
     prompt: "FAKE TEACHER PROMPT",
     workspace,
     data_dir: dataDir,
+    service_id: `fake-service-${fake.token}`,
+    instance_id: "fake-instance",
     mcp_config: {
       format: "agentgenome-teacher-mcp/2",
       endpoint: fake.endpoint,
@@ -204,6 +207,7 @@ function fakePrepared(fake, dataDir, workspace) {
       timeout_ms: 10000,
     },
     host_status: { running: true, pid: 4242 },
+    tool_names: ["validate_definition"],
   };
 }
 
@@ -214,7 +218,10 @@ function fakePrepared(fake, dataDir, workspace) {
  */
 async function startFakeMcp(name, { delayMs = 0 } = {}) {
   const token = `fake-token-${name}`;
-  const state = { started: 0, deletes: 0, sessions: new Set(), calls: [] };
+  const state = {
+    started: 0, deletes: 0, deleteAuth: [], sessions: new Set(), calls: [],
+    registrations: [], unregistrations: [],
+  };
 
   function respond(res, status, payload, headers = {}) {
     const body = payload === undefined ? "" : JSON.stringify(payload);
@@ -229,6 +236,10 @@ async function startFakeMcp(name, { delayMs = 0 } = {}) {
   async function handle(req, res, body) {
     if (req.method === "DELETE") {
       state.deletes += 1;
+      state.deleteAuth.push({
+        authorization: req.headers.authorization ?? null,
+        session: req.headers["mcp-session-id"] ?? null,
+      });
       const id = req.headers["mcp-session-id"];
       if (id) state.sessions.delete(id);
       res.writeHead(204);
@@ -280,11 +291,35 @@ async function startFakeMcp(name, { delayMs = 0 } = {}) {
       return;
     }
     if (message.method === "tools/call") {
-      state.calls.push(message.params);
-      const payload = {
-        ok: true, operation: "validate_definition",
-        result: { fake: true, arguments: message.params?.arguments ?? {} },
-      };
+      const name = message.params?.name;
+      const args = message.params?.arguments ?? {};
+      let payload;
+      if (name === "register_client") {
+        state.registrations.push({ ...args });
+        payload = {
+          ok: true, operation: "register_client",
+          result: {
+            client_id: `client-${state.registrations.length}`,
+            service_id: "fake-service",
+            instance_id: "fake-instance",
+            client_kind: args.client_kind,
+            client_session_id: args.client_session_id,
+            workspace: args.workspace,
+          },
+        };
+      } else if (name === "unregister_client") {
+        state.unregistrations.push({ ...args });
+        payload = {
+          ok: true, operation: "unregister_client",
+          result: { client_id: args.client_id, removed: true },
+        };
+      } else {
+        state.calls.push(message.params);
+        payload = {
+          ok: true, operation: name,
+          result: { fake: true, arguments: args },
+        };
+      }
       respond(res, 200, {
         jsonrpc: "2.0", id: message.id, result: {
           content: [{ type: "text", text: JSON.stringify(payload) }],
@@ -338,6 +373,40 @@ function stopService(dataDir) {
                      "--data-dir", dataDir], { cwd: root, stdio: "ignore" });
 }
 
+function startService(dataDir) {
+  const result = spawnSync(
+    python,
+    ["-m", "node_runtime.control_plane.host", "start",
+     "--data-dir", dataDir, "--backend", "script"],
+    { cwd: root, encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(
+      `service start failed (${result.status}): ${result.stdout} ${result.stderr}`);
+  }
+}
+
+function readRequests(dataDir) {
+  const path = join(dataDir, "requests.jsonl");
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8").split("\n").filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function serviceIdOf(ctx) {
+  const notice = ctx.notices
+    .map((item) => item.message)
+    .find((message) => message.includes("服务: "));
+  const match = notice?.match(/服务: (\S+)/);
+  return match ? match[1] : null;
+}
+
 const scratch = mkdtempSync(join(tmpdir(), "agentgenome-pi-command-"));
 const project = join(scratch, "project");
 const secondProject = join(scratch, "second-project");
@@ -362,12 +431,16 @@ try {
 
   const env = makePi();
   createExtension(env.pi, {
-    format: "agentgenome-pi-command/1", python, provider: PROVIDER, model: MODEL,
+    format: "agentgenome-pi-command/1", python,
   });
   check("command registered", env.commands.has("agentgenome"));
   check("factory registers no tools before activation", env.tools.size === 0);
   check("factory starts no service before activation",
         !existsSync(defaultDataDir));
+
+  // prepare is discovery-only in U03a, so the operator starts the service
+  // explicitly. Activation must attach to that same running service.
+  startService(defaultDataDir);
 
   const ctx = makeContext(project);
   await env.commands.get("agentgenome").handler("", ctx);
@@ -380,6 +453,10 @@ try {
         ctx.notices.some((item) => item.message.includes(defaultDataDir)));
   check("activation names the session cwd as workspace",
         ctx.notices.some((item) => item.message.includes(project)));
+  check("activation reports the real service identity",
+        typeof serviceIdOf(ctx) === "string" && serviceIdOf(ctx).length > 0);
+  check("activation reports the client identity source",
+        ctx.notices.some((item) => item.message.includes("临时激活 UUID")));
   const active = env.activeNames();
   for (const name of NATIVE_TOOLS) {
     check(`native tool preserved: ${name}`, active.includes(name));
@@ -387,6 +464,18 @@ try {
   for (const name of env.tools.keys()) {
     check(`MCP tool active: ${name}`, active.includes(name));
   }
+
+  // prepare writes nothing, and the live bridge registered this Pi client
+  // through the real MCP transport (service-side evidence).
+  check("prepare writes no workspace reference files",
+        !existsSync(join(project, "sop-guide.md"))
+        && !existsSync(join(project, "sop-template.yaml")));
+  check("prepare writes no Teacher prompt file",
+        !existsSync(join(defaultDataDir, "teacher", "prompt.md")));
+  check("real MCP registered the Pi client",
+        readRequests(defaultDataDir).some(
+          (record) => record.operation === "mcp:register_client"
+            && record.outcome === "ok"));
 
   writeFileSync(join(project, "sop.yaml"), sop);
 
@@ -405,9 +494,6 @@ try {
   check("service issued a publisher credential", typeof token === "string" && token.length > 0);
   const notices = ctx.notices.map((item) => item.message).join("\n");
   check("publisher token never appears in notifications", !notices.includes(token));
-  const promptFile = join(defaultDataDir, "teacher", "prompt.md");
-  check("publisher token never appears in the Teacher prompt",
-        !readFileSync(promptFile, "utf8").includes(token));
   const logFile = join(defaultDataDir, "host.log");
   check("publisher token never appears in the service log",
         !existsSync(logFile) || !readFileSync(logFile, "utf8").includes(token));
@@ -438,7 +524,8 @@ try {
   await env.commands.get("agentgenome").handler("", ctx);
   ({ result, payload } = await validate(env, ctx, "validate-reenabled"));
   check("re-enable reconnects and validates",
-        result.isError !== true && payload?.ok === true);
+        result.isError !== true && payload?.ok === true,
+        JSON.stringify(payload));
   await env.commands.get("agentgenome").handler("off", ctx);
 
   await env.commands.get("agentgenome").handler("", ctx);
@@ -492,13 +579,16 @@ try {
   // and closing that session leaves the first window's tools working.
   const second = makePi();
   createExtension(second.pi, {
-    format: "agentgenome-pi-command/1", python, provider: PROVIDER, model: MODEL,
+    format: "agentgenome-pi-command/1", python,
   });
   const secondCtx = makeContext(secondProject);
   writeFileSync(join(secondProject, "sop.yaml"), sop);
   await second.commands.get("agentgenome").handler("", secondCtx);
   check("a second cwd reuses the same default service",
         secondCtx.notices.some((item) => item.message.includes(defaultDataDir)));
+  check("two cwds discover the same persistent service_id",
+        serviceIdOf(secondCtx) === serviceIdOf(ctx),
+        `${serviceIdOf(secondCtx)} != ${serviceIdOf(ctx)}`);
   check("a second cwd registers the Graph tools",
         second.tools.size === expectedTools.length
         && second.activeNames().includes("validate_definition"));
@@ -527,6 +617,25 @@ try {
   check("shutdown closes the active mode",
         result.isError === true && payload?.code === "not_active");
 
+  await waitFor(
+    () => readRequests(defaultDataDir).some(
+      (record) => record.operation === "mcp:unregister_client"
+        && record.outcome === "ok"),
+    "the service to record the client detach");
+  check("off detaches the client through real MCP",
+        readRequests(defaultDataDir).some(
+          (record) => record.operation === "mcp:unregister_client"
+            && record.outcome === "ok"));
+  const serviceStatus = JSON.parse(spawnSync(
+    python,
+    ["-m", "node_runtime.control_plane.host", "status",
+     "--data-dir", defaultDataDir],
+    { cwd: root, encoding: "utf8" }).stdout);
+  check("deactivation leaves the service running",
+        serviceStatus.running === true && serviceStatus.ready === true);
+  check("deactivation leaves the service diagnostics in place",
+        existsSync(join(defaultDataDir, "requests.jsonl")));
+
   // -- delayed activation: off during prepare, concurrent command ----------
   const prepareWaiters = [];
   let prepareCalls = 0;
@@ -539,7 +648,7 @@ try {
     },
   });
   createExtension(delayed.pi, {
-    format: "agentgenome-pi-command/1", python, provider: PROVIDER, model: MODEL,
+    format: "agentgenome-pi-command/1", python,
   });
   const delayedCtx = makeContext(secondProject);
   const activation = delayed.commands.get("agentgenome").handler("", delayedCtx);
@@ -574,7 +683,7 @@ try {
       fakePrepared(registrationFake, registrationData, fakeWorkspace))),
   });
   createExtension(registration.pi, {
-    format: "agentgenome-pi-command/1", python, provider: PROVIDER, model: MODEL,
+    format: "agentgenome-pi-command/1", python,
   });
   const registrationCtx = makeContext(fakeWorkspace);
   const pendingActivation = registration.commands.get("agentgenome")
@@ -588,6 +697,9 @@ try {
         registration.tools.size === 1);
   check("late registration stays inactive",
         !registration.activeNames().includes("validate_definition"));
+  check("late registration released its cancelled client registration",
+        registrationFake.state.registrations.length === 1
+        && registrationFake.state.unregistrations.length === 1);
   await waitFor(() => registrationFake.state.deletes === 1,
                 "the late registration session to close");
   check("late registration closes its discovery session",
@@ -607,6 +719,8 @@ try {
         cycle.result.isError !== true && cycle.payload?.result?.fake === true);
   check("reconnect opens a new MCP session",
         registrationFake.state.started === 2);
+  check("re-activation registers a fresh client identity",
+        registrationFake.state.registrations.length === 2);
   check("the uploaded definition arrives as text, not a client path",
         registrationFake.state.calls.length === 1
         && registrationFake.state.calls[0].arguments.definition_path === undefined
@@ -619,12 +733,53 @@ try {
                 "the active session to close after off");
   check("off closes the active MCP session",
         registrationFake.state.deletes === 2);
+  check("off unregisters the active client identity",
+        registrationFake.state.unregistrations.length === 2);
   await registration.commands.get("agentgenome").handler("", registrationCtx);
   cycle = await validate(registration, registrationCtx, "validate-fake-2");
   check("closed bridge reconnects again",
         cycle.payload?.result?.fake === true
         && registrationFake.state.started === 3);
   await registration.commands.get("agentgenome").handler("off", registrationCtx);
+
+  // Reconfiguring must clean up the OLD session at the OLD endpoint with the
+  // OLD credential, before the new config replaces the one that owns it.
+  const oldFake = await startFakeMcp("old-endpoint", { delayMs: 0 });
+  const newFake = await startFakeMcp("new-endpoint", { delayMs: 0 });
+  fakes.push(oldFake, newFake);
+  const teacherConfig = (fake) => ({
+    format: "agentgenome-teacher-mcp/2",
+    endpoint: fake.endpoint,
+    token: fake.token,
+    workspace: fakeWorkspace,
+    timeout_ms: 5000,
+  });
+  const bridgePi = makePi(NATIVE_TOOLS);
+  const bridge = await registerTeacherTools(
+    bridgePi.pi, teacherConfig(oldFake),
+    { checkConflicts: false, sessionShutdown: false,
+      clientSessionId: "two-endpoint-session" });
+  await bridge.attach(teacherConfig(oldFake));
+  check("two-endpoint attach initializes the old endpoint",
+        oldFake.state.started === 1 && oldFake.state.sessions.size === 1);
+  const oldSession = [...oldFake.state.sessions][0];
+  await bridge.configure(teacherConfig(newFake));
+  await waitFor(() => oldFake.state.deleteAuth.length === 1,
+                "the old endpoint to receive the session DELETE");
+  check("two-endpoint reconfigure initializes the new endpoint",
+        newFake.state.started === 1);
+  check("two-endpoint reconfigure DELETEs only the old endpoint",
+        oldFake.state.deleteAuth.length === 1
+        && newFake.state.deleteAuth.length === 0);
+  check("the DELETE carries the old credential and session",
+        oldFake.state.deleteAuth[0].authorization === `Bearer ${oldFake.token}`
+        && oldFake.state.deleteAuth[0].session === oldSession);
+  await bridge.close();
+  await waitFor(() => newFake.state.deleteAuth.length === 1,
+                "the new endpoint to receive the close DELETE");
+  check("closing the bridge DELETEs the new endpoint with the new credential",
+        newFake.state.deleteAuth[0].authorization === `Bearer ${newFake.token}`
+        && oldFake.state.deleteAuth.length === 1);
 
   // A third-party tool with the same name must fail activation instead of
   // being silently shadowed.
@@ -635,7 +790,7 @@ try {
       fakePrepared(conflictFake, join(scratch, "conflict-data"), conflictProject))),
   });
   createExtension(conflicted.pi, {
-    format: "agentgenome-pi-command/1", python, provider: PROVIDER, model: MODEL,
+    format: "agentgenome-pi-command/1", python,
   });
   const conflictCtx = makeContext(conflictProject);
   await conflicted.commands.get("agentgenome").handler("", conflictCtx);
@@ -645,6 +800,8 @@ try {
                                  && item.message.includes("冲突")));
   check("name conflict leaves activation inactive",
         !conflicted.activeNames().includes("validate_definition"));
+  check("name conflict never registers a client",
+        conflictFake.state.registrations.length === 0);
 
   console.log(JSON.stringify({ ok: true, checks }, null, 2));
 } catch (error) {

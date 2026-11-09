@@ -7,6 +7,7 @@ object, never to duplicate state logic.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -45,6 +46,10 @@ ACCEPTANCE_APPLIED = "acceptance_revision_applied"
 MESSAGE_SUPERSEDED = "message_superseded"
 REVISION_FIELDS = ("contract_ref", "previous_ref", "upper_contract_ref",
                    "origin", "criteria_ref", "authority_ref")
+DEFINITION_CURSOR_FORMAT = "agentgenome-definition-cursor/1"
+DEFINITION_CURSOR_MAX_LENGTH = 4096
+DEFINITION_PAGE_CHUNK = 200
+DEFINITION_QUERY_MAX_LENGTH = 256
 
 
 def _activity_fingerprint(payload: Mapping[str, Any]) -> str:
@@ -1926,6 +1931,121 @@ class Api:
                         "media_type": row["media_type"], "created_by": row["created_by"],
                         "created_at": row["created_at"]}
             R.fail("invalid_argument", "unknown resource kind", kind=kind)
+
+    # ------------------------------------------------------------------
+    # published definition catalog
+
+    def list_definitions(self, actor: R.Actor, *, query: Any = None,
+                         limit: Any = 50,
+                         after: Any = None) -> dict[str, Any]:
+        """List the newest published revision of each definition.
+
+        Stable definition_id keyset order; the cursor is opaque and bound to
+        the normalized query. Visibility follows the existing definition read
+        path: every published Graph of this local service is catalog-visible.
+        A page is a live read, not a multi-request snapshot.
+        """
+        actor.require_role("publisher")
+        R.require(isinstance(limit, int) and not isinstance(limit, bool)
+                  and 1 <= limit <= 100,
+                  "invalid_argument", "limit must be an integer in 1..100",
+                  limit=limit)
+        if query is None:
+            query = ""
+        R.require(isinstance(query, str)
+                  and len(query) <= DEFINITION_QUERY_MAX_LENGTH,
+                  "invalid_argument",
+                  "query must be a string of at most 256 characters")
+        floor = self._definition_cursor_start(after, query)
+        items: list[dict[str, Any]] = []
+        with self.store.read() as tx:
+            while len(items) <= limit:
+                rows = tx.all(
+                    "SELECT * FROM definitions AS d WHERE d.revision ="
+                    " (SELECT MAX(revision) FROM definitions"
+                    "  WHERE definition_id = d.definition_id)"
+                    " AND d.definition_id > ?"
+                    " ORDER BY d.definition_id LIMIT ?",
+                    (floor, DEFINITION_PAGE_CHUNK))
+                if not rows:
+                    break
+                for row in rows:
+                    floor = row["definition_id"]
+                    if self._definition_matches(row, query):
+                        items.append(self._definition_summary(row))
+                        if len(items) > limit:
+                            break
+                if len(rows) < DEFINITION_PAGE_CHUNK or len(items) > limit:
+                    break
+        if len(items) > limit:
+            next_cursor = self._definition_cursor_encode(
+                query, items[limit - 1]["definition_id"])
+            items = items[:limit]
+        else:
+            next_cursor = None
+        return {"items": items, "next_cursor": next_cursor}
+
+    @staticmethod
+    def _definition_matches(row: Any, query: str) -> bool:
+        if not query:
+            return True
+        if query in row["definition_id"]:
+            return True
+        document = load(row["document_json"]) or {}
+        description = document.get("description")
+        return isinstance(description, str) and query in description
+
+    @staticmethod
+    def _definition_summary(row: Any) -> dict[str, Any]:
+        document = load(row["document_json"]) or {}
+        description = document.get("description")
+        return {
+            "definition_id": row["definition_id"],
+            "revision": row["revision"],
+            "definition_ref": row["definition_ref"],
+            "description": description if isinstance(description, str) else "",
+            "created_at": row["created_at"],
+        }
+
+    @staticmethod
+    def _definition_cursor_encode(query: str, after: str) -> str:
+        payload = R.canonical({"after": after,
+                               "format": DEFINITION_CURSOR_FORMAT,
+                               "query": query})
+        encoded = base64.urlsafe_b64encode(
+            payload.encode("utf-8")).decode("ascii").rstrip("=")
+        check = hashlib.sha256(encoded.encode("ascii")).hexdigest()[:16]
+        return f"{encoded}.{check}"
+
+    @staticmethod
+    def _definition_cursor_start(after: Any, query: str) -> str:
+        if after is None:
+            return ""
+        R.require(isinstance(after, str) and 0 < len(after)
+                  <= DEFINITION_CURSOR_MAX_LENGTH,
+                  "invalid_argument",
+                  "after must be an opaque cursor string")
+        encoded, dot, check = after.rpartition(".")
+        R.require(bool(dot) and bool(encoded) and len(check) == 16,
+                  "invalid_argument", "after is not a valid cursor")
+        try:
+            expected = hashlib.sha256(encoded.encode("ascii")).hexdigest()[:16]
+            padding = "=" * (-len(encoded) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(encoded + padding))
+        except (ValueError, TypeError):
+            R.fail("invalid_argument", "after is not a valid cursor")
+        R.require(expected == check, "invalid_argument",
+                  "after is not a valid cursor")
+        R.require(isinstance(payload, dict)
+                  and set(payload) == {"after", "format", "query"}
+                  and payload.get("format") == DEFINITION_CURSOR_FORMAT
+                  and isinstance(payload.get("query"), str)
+                  and isinstance(payload.get("after"), str)
+                  and 0 < len(payload["after"]) <= 128,
+                  "invalid_argument", "after is not a valid cursor")
+        R.require(payload["query"] == query, "invalid_argument",
+                  "after cursor belongs to a different query")
+        return payload["after"]
 
     def list_resources(self, actor: R.Actor, run_id: str) -> dict[str, Any]:
         with self.store.read() as tx:

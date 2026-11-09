@@ -4,16 +4,17 @@
  * The extension factory only registers one command and its lifecycle events.
  * No process starts, no Graph tool is registered and no Teacher prompt is
  * injected until the user runs `/agentgenome` in a session. Activation prepares
- * the existing control plane through the installed Python, reuses the shipped
+ * the existing control plane through the installed Python, attaches the shipped
  * MCP client bridge for the Graph tools, and appends the Teacher prompt to the
  * current Pi system prompt. The native Pi context, model and tools stay as the
  * user configured them; `/agentgenome off` only removes this mode.
  *
  * The generated user extension (`agentgenome.js`) imports this module and
- * passes the absolute Python executable plus the Worker provider/model that
- * were fixed at install time. The session's own model is never used to infer
- * the Host Worker configuration.
+ * passes the absolute Python executable plus an optional isolated data
+ * directory. No Worker provider/model, endpoint, port or credential is fixed
+ * at install time: every activation discovers the running service.
  */
+import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,16 +38,43 @@ function normalizeOptions(options) {
       `AgentGenome Pi command config must use format ${CONFIG_FORMAT}`,
       "invalid_config");
   }
-  for (const key of ["python", "provider", "model"]) {
-    if (typeof options[key] !== "string" || options[key].length === 0) {
-      throw fail(`AgentGenome Pi command config is missing ${key}`,
-                 "invalid_config");
-    }
+  if (typeof options.python !== "string" || options.python.length === 0) {
+    throw fail("AgentGenome Pi command config is missing python",
+               "invalid_config");
+  }
+  if (options.data_dir !== undefined
+      && (typeof options.data_dir !== "string"
+          || options.data_dir.length === 0)) {
+    throw fail("AgentGenome Pi command data_dir must be a nonempty path",
+               "invalid_config");
   }
   return {
     ...options,
     packageRoot: options.packageRoot || PACKAGE_ROOT,
   };
+}
+
+/**
+ * Prefer the real Pi session id; a bridge process without one cannot claim a
+ * native identity, so it uses a per-activation UUID and reports the source.
+ */
+function resolveIdentity(ctx) {
+  let sessionId = null;
+  try {
+    const manager = ctx?.sessionManager;
+    if (manager && typeof manager.getSessionId === "function") {
+      const value = manager.getSessionId();
+      if (typeof value === "string" && value.trim().length > 0) {
+        sessionId = value;
+      }
+    }
+  } catch {
+    // A session manager that throws has no usable identity.
+  }
+  if (sessionId !== null) {
+    return { clientSessionId: sessionId, identitySource: "session" };
+  }
+  return { clientSessionId: randomUUID(), identitySource: "activation" };
 }
 
 function parseJson(text) {
@@ -85,6 +113,12 @@ function parsePrepared(result) {
   if (typeof payload.data_dir !== "string" || payload.data_dir.length === 0) {
     throw fail("prepare returned no service data directory", "prepare_failed");
   }
+  if (payload.service_id !== undefined && payload.service_id !== null
+      && (typeof payload.service_id !== "string"
+          || payload.service_id.length === 0)) {
+    throw fail("prepare returned an invalid service identity",
+               "prepare_failed");
+  }
   const mcpConfig = typeof payload.mcp_config === "string"
     ? parseJson(payload.mcp_config) : payload.mcp_config;
   if (!mcpConfig || typeof mcpConfig !== "object") {
@@ -110,14 +144,14 @@ function hostSummary(status) {
 export default function agentgenomeCommandExtension(pi, rawOptions) {
   const config = normalizeOptions(rawOptions);
 
-  // Registered once per Pi process; Pi has no unregister operation. Activation
-  // state decides whether the tools may run, so a session reset only needs to
-  // deactivate and close the MCP connection.
+  // Tools are registered once per Pi process; Pi has no unregister operation.
+  // Every activation re-attaches the same bridge to the newly discovered
+  // endpoint/token/workspace and registers a fresh client identity.
   let bridge = null;
-  let registration = null;
   let activationInFlight = null;
   let activationGeneration = 0;
   let trace = null;
+  let lastServiceId = null;
   const state = {
     active: false,
     prompt: null,
@@ -125,6 +159,10 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
     dataDir: null,
     hostStatus: null,
     mcpConfig: null,
+    serviceId: null,
+    instanceId: null,
+    identitySource: null,
+    clientId: null,
   };
 
   function currentToolNames() {
@@ -157,9 +195,9 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
 
   function deactivate() {
     // Any in-flight activation compares this generation after each await; an
-    // off/session reset must win even if prepare or tool registration finishes
-    // later. Pi cannot unregister tools, so a late registration keeps its
-    // reusable handle but is closed and left inactive.
+    // off/session reset must win even if prepare or attach finishes later.
+    // Pi cannot unregister tools, so a late attach is closed and left inactive
+    // while the registered tool names stay reusable.
     activationGeneration += 1;
     const wasActive = state.active;
     state.active = false;
@@ -168,12 +206,16 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
     state.dataDir = null;
     state.hostStatus = null;
     state.mcpConfig = null;
+    state.serviceId = null;
+    state.instanceId = null;
+    state.identitySource = null;
+    state.clientId = null;
     closeTrace();
     if (bridge) {
       try {
         bridge.close();
       } catch {
-        // The session may already be closed.
+        // The bridge may already be closed.
       }
     }
     removeTools();
@@ -185,14 +227,17 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
     if (!cwd) throw fail("this Pi context has no working directory",
                          "no_cwd");
     // The service data directory is per-user and shared by every cwd; the
-    // local workspace is this session's cwd. prepare starts or reuses the
-    // default service and returns a delivery-free publisher connection.
-    const result = await pi.exec(config.python, [
+    // local workspace is this session's cwd. prepare only discovers an
+    // already running service and returns a delivery-free publisher
+    // connection; it never starts or creates one.
+    const argv = [
       "-m", "node_runtime.control_plane.pi_integration", "prepare",
       "--workspace", cwd,
-      "--provider", config.provider,
-      "--model", config.model,
-    ], {
+    ];
+    if (config.data_dir !== undefined) {
+      argv.push("--data-dir", config.data_dir);
+    }
+    const result = await pi.exec(config.python, argv, {
       cwd: config.packageRoot,
       timeout: PREPARE_TIMEOUT_MS,
       signal: ctx?.signal,
@@ -200,38 +245,9 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
     return { prepared: parsePrepared(result) };
   }
 
-  function currentBridge(prepared) {
-    if (bridge !== null) return Promise.resolve(bridge);
-    if (registration === null) {
-      // One registration attempt per process. A second activation while this
-      // is pending must not register the same names again.
-      registration = registerTeacherTools(pi, prepared.mcpConfig, {
-        enabled: () => state.active,
-        sessionShutdown: false,
-        // A run created by this Pi becomes the panel's default selection. The
-        // callback is silent for failures and is always the committed result.
-        onResult: (event) => {
-          if (!state.active || trace === null) return;
-          if (event?.tool !== "create_run") return;
-          const runId = event.result?.run_id;
-          if (typeof runId === "string" && runId.length > 0) {
-            trace.noteSessionRun(runId);
-          }
-        },
-      }).then((handle) => {
-        if (bridge === null) bridge = handle;
-        return bridge;
-      }).finally(() => {
-        registration = null;
-      });
-    }
-    return registration;
-  }
-
-  // A read-only view over the same prepared service credential. The panel is a
-  // nonmodal overlay owned by Pi; it never starts a service, calls a model or
-  // writes local state. Only interactive TUI sessions get it, and only when the
-  // installed wrapper supplied Pi's official width helpers.
+  // The panel is a nonmodal overlay owned by Pi; it never starts a service,
+  // calls a model or writes local state. Only interactive TUI sessions get it,
+  // and only when the installed wrapper supplied Pi's official width helpers.
   function ensureTrace(ctx) {
     if (ctx?.mode !== "tui" || state.mcpConfig === null) return false;
     if (trace !== null) return true;
@@ -265,9 +281,35 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
     return true;
   }
 
+  async function attachBridge(prepared, identity, generation) {
+    if (bridge === null) {
+      bridge = await registerTeacherTools(pi, prepared.mcpConfig, {
+        enabled: () => state.active,
+        sessionShutdown: false,
+        // A run created by this Pi becomes the panel's default selection. The
+        // callback is silent for failures and is always the committed result.
+        onResult: (event) => {
+          if (!state.active || trace === null) return;
+          if (event?.tool !== "create_run") return;
+          const runId = event.result?.run_id;
+          if (typeof runId === "string" && runId.length > 0) {
+            trace.noteSessionRun(runId);
+          }
+        },
+      });
+    }
+    if (generation !== activationGeneration) return null;
+    return bridge.attach(prepared.mcpConfig, {
+      clientSessionId: identity.clientSessionId,
+      workspace: prepared.workspace,
+    });
+  }
+
   async function runActivation(ctx, generation) {
     let prepared;
+    let identity;
     try {
+      identity = resolveIdentity(ctx);
       ({ prepared } = await prepare(ctx));
     } catch (error) {
       if (generation === activationGeneration) {
@@ -278,11 +320,18 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
     }
     if (generation !== activationGeneration) return;
 
-    let handle;
+    let attached;
     try {
-      handle = await currentBridge(prepared);
+      attached = await attachBridge(prepared, identity, generation);
     } catch (error) {
-      if (generation !== activationGeneration) return;
+      if (generation !== activationGeneration) {
+        try {
+          await bridge?.close();
+        } catch {
+          // Best effort; the activation was already cancelled.
+        }
+        return;
+      }
       const code = error?.code ?? "mcp_unavailable";
       if (error instanceof ToolNameConflictError || code === "tool_name_conflict") {
         ctx.ui.notify(
@@ -295,26 +344,33 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
       }
       return;
     }
-    if (generation !== activationGeneration) {
-      // Registration finished after off/session reset. Keep the handle so a
-      // later activation can reuse the registered tool names, but close its
-      // MCP connection and leave every guard inactive. Pi adds every newly
-      // registered tool to the active loadout, so remove our names again.
+    if (attached === null || generation !== activationGeneration) {
+      // The client registration finished after off/session reset: unregister
+      // it best-effort and drop the temporary tool activation. The same
+      // bridge stays reusable for a later explicit activation.
       try {
-        handle.close();
+        await bridge?.close();
       } catch {
-        // The connection may already be closed.
+        // The service may already be gone.
       }
       removeTools();
       return;
     }
 
+    const previousServiceId = lastServiceId;
+    const serviceChanged = previousServiceId !== null
+      && previousServiceId !== prepared.service_id;
+    lastServiceId = prepared.service_id;
     state.active = true;
     state.prompt = prepared.prompt;
     state.workspace = prepared.workspace;
     state.dataDir = prepared.data_dir;
     state.hostStatus = prepared.hostStatus;
     state.mcpConfig = prepared.mcpConfig;
+    state.serviceId = prepared.service_id;
+    state.instanceId = prepared.instance_id;
+    state.identitySource = identity.identitySource;
+    state.clientId = attached.client_id;
 
     try {
       const current = pi.getActiveTools();
@@ -330,13 +386,21 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
     const host = hostSummary(prepared.hostStatus);
     const warning = prepared.hostStatus.running === true
       ? "" : "\n警告: Host 未按本次参数运行，先处理上面的 host 状态再提交 run。";
+    const switched = serviceChanged
+      ? `\n警告: 服务已更换（${previousServiceId} → ${prepared.service_id}）；`
+        + "旧服务的 run 未迁移，也不会自动重放。"
+      : "";
     const traceHint = ensureTrace(ctx)
       ? "\nTrace: 右上角 AgentGenome ▸（点击或 /agentgenome trace 展开）"
       : "";
+    const identityLabel = identity.identitySource === "session"
+      ? "Pi 会话 ID" : "临时激活 UUID（本机无会话 ID）";
     ctx.ui.notify(
-      `AgentGenome 已启用。\n数据目录: ${prepared.data_dir}\n工作区: ${prepared.workspace}`
+      `AgentGenome 已启用。\n服务: ${prepared.service_id}`
+      + `\n客户端身份: ${identityLabel}`
+      + `\n数据目录: ${prepared.data_dir}\n工作区: ${prepared.workspace}`
       + `\nHost: ${host}\nGraph 工具: ${currentToolNames().length} 个`
-      + `${traceHint}${warning}`,
+      + `${traceHint}${switched}${warning}`,
       prepared.hostStatus.running === true ? "info" : "warning");
   }
 
@@ -344,7 +408,8 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
     if (state.active) {
       ensureTrace(ctx);
       ctx.ui.notify(
-        `AgentGenome 已启用（数据目录: ${state.dataDir}）。重复命令不会重复启动。`,
+        `AgentGenome 已启用（服务: ${state.serviceId}，数据目录: ${state.dataDir}）。`
+        + "重复命令不会重复启动。",
         "info");
       return Promise.resolve();
     }
@@ -355,7 +420,7 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
       return activationInFlight;
     }
     ctx.ui.notify(
-      `AgentGenome 正在准备普通 Pi 入口（Worker ${config.provider}/${config.model}）...`,
+      "AgentGenome 正在准备普通 Pi 入口（发现已运行服务）...",
       "info");
 
     const generation = activationGeneration;
@@ -374,10 +439,16 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
     return run;
   }
 
+  function identityLabel() {
+    if (state.identitySource === "session") return "Pi 会话 ID";
+    if (state.identitySource === "activation") return "临时激活 UUID";
+    return "未知";
+  }
+
   function reportStatus(ctx) {
     if (activationInFlight !== null && !state.active) {
       ctx.ui.notify(
-        "AgentGenome 正在启用：prepare 或工具注册尚未完成。"
+        "AgentGenome 正在启用：prepare 或连接尚未完成。"
         + "可执行 /agentgenome off 取消本次启用。",
         "info");
       return;
@@ -390,7 +461,9 @@ export default function agentgenomeCommandExtension(pi, rawOptions) {
       return;
     }
     ctx.ui.notify(
-      `AgentGenome 已启用。\n数据目录: ${state.dataDir}\n工作区: ${state.workspace}`
+      `AgentGenome 已启用。\n服务: ${state.serviceId}`
+      + `\n客户端身份: ${identityLabel()}`
+      + `\n数据目录: ${state.dataDir}\n工作区: ${state.workspace}`
       + `\nHost（prepare 时）: ${hostSummary(state.hostStatus)}`
       + `\nGraph 工具: ${currentToolNames().length} 个`
       + `\nTrace 面板: ${trace !== null

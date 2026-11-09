@@ -1,0 +1,26 @@
+{
+  "name": "agentgenome",
+  "version": "0.1.0",
+  "private": true,
+  "description": "One-time AgentGenome setup that installs the Python runtime and one native CLI entry",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agentgenome-setup": "bin/setup.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin/",
+    "node_runtime/**/*.py",
+    "node_runtime/**/*.md",
+    "node_runtime/**/*.mjs",
+    "pyproject.toml",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "test:install": "node --test tests/install/*.test.mjs"
+  }
+}

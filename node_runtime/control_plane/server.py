@@ -39,6 +39,7 @@ from .http_api import (IDENTITY_FIELDS, dispatch, error_envelope, ok_envelope,
 from .mcp_server import (TOOL_ARGUMENTS, bind_request_arguments,
                          build_server, reset_request_arguments)
 from .resources import ControlPlaneError
+from .service_access import ServiceAccess
 from .service_auth import (DELIVERY_KIND, ServiceAuth, bind_actor,
                            current_actor, reset_actor)
 from .trace import TraceService
@@ -104,6 +105,9 @@ class ApiServer:
         self.port = port
         self.endpoint: str | None = None
         self.auth = ServiceAuth(host.data_dir)
+        self.service_access = ServiceAccess(
+            service_id=self.auth.service_id(),
+            instance_id=host.instance_id, backends=host.backends)
         self.trace = TraceService(
             host.api, service_id=self.auth.service_id(),
             backends=host.backends,
@@ -139,7 +143,7 @@ class ApiServer:
             api=self.host.api, actor_resolver=current_actor,
             middleware=[_McpDiagnostics(self.trace),
                         _RejectClientIdentity(), _McpActorBinding(self.auth)],
-            trace=self.trace)
+            trace=self.trace, service_access=self.service_access)
         mcp_starlette = mcp.streamable_http_app(
             streamable_http_path="/mcp", host=self.bind)
         session_manager = mcp.session_manager
@@ -482,7 +486,8 @@ class ApiServer:
                   arguments: Mapping[str, Any]) -> dict[str, Any]:
         try:
             return dispatch(self.host.api, actor, operation, arguments,
-                            trace=self.trace)
+                            trace=self.trace,
+                            service_access=self.service_access)
         except Exception as error:  # transport boundary, never silent
             self._log("request_error", operation=operation,
                       error=type(error).__name__)

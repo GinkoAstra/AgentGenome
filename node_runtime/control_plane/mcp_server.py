@@ -11,11 +11,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextvars import ContextVar
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.mcpserver import MCPServer
+from pydantic import Field
 
-from .api import Api
+from .api import (DEFINITION_CURSOR_MAX_LENGTH, DEFINITION_QUERY_MAX_LENGTH,
+                  Api)
 from .http_api import PUBLIC_OPERATIONS, dispatch
 from .resources import Actor, ControlPlaneError
 
@@ -54,6 +56,11 @@ TOOL_ARGUMENTS = {
     "read_execution": frozenset(
         {"run_id", "worker_id", "epoch", "delivery_key", "after", "limit"}),
     "read_requests": frozenset({"request_id", "run_id", "after", "limit"}),
+    "get_service_info": frozenset(),
+    "register_client": frozenset(
+        {"client_kind", "client_session_id", "workspace"}),
+    "unregister_client": frozenset({"client_id"}),
+    "list_definitions": frozenset({"query", "limit", "after"}),
 }
 
 # Raw tools/call arguments for the current network request. The SDK applies
@@ -61,6 +68,19 @@ TOOL_ARGUMENTS = {
 # empty string can be distinguished from an absent key.
 _CURRENT_ARGUMENTS: ContextVar[Mapping[str, Any] | None] = ContextVar(
     "agentgenome_mcp_arguments", default=None)
+
+# Public input schema for list_definitions. The annotations stay `Any` so
+# explicit values reach the shared dispatcher unchanged; json_schema_extra only
+# declares the accepted type/range to MCP clients.
+_DefinitionQuery = Annotated[Any, Field(
+    json_schema_extra={"type": ["string", "null"],
+                       "maxLength": DEFINITION_QUERY_MAX_LENGTH})]
+_DefinitionLimit = Annotated[Any, Field(
+    json_schema_extra={"type": "integer", "minimum": 1, "maximum": 100,
+                       "default": 50})]
+_DefinitionCursor = Annotated[Any, Field(
+    json_schema_extra={"type": ["string", "null"],
+                       "maxLength": DEFINITION_CURSOR_MAX_LENGTH})]
 
 
 def bind_request_arguments(arguments: Mapping[str, Any] | None) -> Any:
@@ -104,7 +124,8 @@ def _definition_document(document: dict[str, Any] | None,
 
 
 def build_server(*, api: Api, actor_resolver: Any,
-                 middleware: Any = None, trace: Any = None) -> MCPServer:
+                 middleware: Any = None, trace: Any = None,
+                 service_access: Any = None) -> MCPServer:
     """Build the MCP adapter around the running service's Api.
 
     The network service injects its own Api plus a per-request actor resolver;
@@ -125,7 +146,8 @@ def build_server(*, api: Api, actor_resolver: Any,
         so argument rejection, CAS and idempotency cannot drift apart.
         """
         try:
-            return dispatch(api, actor(), operation, arguments, trace=trace)
+            return dispatch(api, actor(), operation, arguments, trace=trace,
+                            service_access=service_access)
         except ControlPlaneError as error:  # identity resolution failed
             return _failed(operation, error)
 
@@ -287,5 +309,55 @@ def build_server(*, api: Api, actor_resolver: Any,
         if run_id is not None:
             arguments["run_id"] = run_id
         return call("read_requests", arguments)
+
+    @server.tool()
+    def get_service_info() -> dict[str, Any]:
+        """Read the actual service identity, deployed backends and public
+        operations. Never returns credentials or user paths."""
+        return call("get_service_info", {})
+
+    @server.tool()
+    def register_client(client_kind: str, client_session_id: str,
+                        workspace: str) -> dict[str, Any]:
+        """Register this client session for the service lifetime.
+
+        Idempotent per authenticated actor/kind/session; workspace is a label,
+        not read permission. Registration grants no role and creates no peer.
+        """
+        return call("register_client",
+                    {"client_kind": client_kind,
+                     "client_session_id": client_session_id,
+                     "workspace": workspace})
+
+    @server.tool()
+    def unregister_client(client_id: str) -> dict[str, Any]:
+        """Detach one client registration owned by this actor. Never stops a
+        run, execution or backend."""
+        return call("unregister_client", {"client_id": client_id})
+
+    @server.tool()
+    def list_definitions(query: _DefinitionQuery = None,
+                         limit: _DefinitionLimit = None,
+                         after: _DefinitionCursor = None) -> dict[str, Any]:
+        """List the newest published revision of each definition, ordered by
+        definition_id. `query` is a literal id/description substring. Pass the
+        previous next_cursor token as `after`; a cursor is bound to its query.
+
+        Explicitly supplied values (including null) are forwarded to the shared
+        dispatcher unchanged, so limit/query/after validation and error
+        envelopes match the JSON transport. Omitted values keep the defaults.
+        """
+        supplied = current_request_arguments()
+        if supplied is None:
+            arguments: dict[str, Any] = {
+                name: value
+                for name, value in (("query", query), ("limit", limit),
+                                    ("after", after))
+                if value is not None}
+        else:
+            arguments = {name: supplied[name]
+                         for name in ("query", "limit", "after")
+                         if name in supplied}
+        return call("list_definitions", arguments)
 
     return server
