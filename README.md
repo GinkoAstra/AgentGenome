@@ -69,15 +69,26 @@ A persistent graph runtime for agent workflows.
 - **状态可恢复**：期望状态与执行事实分开保存，通过条件更新、幂等请求和执行身份协调恢复。
 - **过程可查看**：Pi 终端面板、HTTP 快照、SSE 订阅和命令行使用同一服务的 trace 数据。
 
-## CLI 执行后端
+## 执行后端与当前支持范围
 
-除 Pi／Script 外，现支持 Codex CLI、Qoder CLI 与 Claude Code 执行后端，继续通过同一 API、调度器和验收协议运行。服务端通过 `--backend codex|qoder|claude` 选择 CLI 后端，使用 `--model` 指定模型、`--config-dir` 指向已有 CLI 配置目录。CLI 后端不使用 Pi 的 `--provider` 参数。
+**对话入口与执行后端可以不同。** Pi 中的 Teacher 负责与用户讨论流程，通过 MCP 操作服务；Backend 负责运行承担具体任务的 Agent。接入 Codex 或 Qoder 执行后端，不代表已经为它们提供了与 Pi 相同的交互插件。
 
-Codex／Qoder 已通过真实模型候选、退回、同会话续接、接受闭环；Claude 已通过真实 CLI＋受控模型协议验证，真实上游验收待完成。Kimi 尚未实现。统一安装与自动配置简化仍是后续工作，本次不宣称已提供。
+| 后端 | 当前验证范围 |
+| --- | --- |
+| Pi | 主要对话入口与 Agent 执行后端，已有真实业务示例 |
+| Script | 显式加载的可信程序，可承担确定性任务或 Checker |
+| Codex CLI | 真实模型完成候选提交、退回、原会话继续、接受流程 |
+| Qoder CLI | 真实模型完成同一验收流程 |
+| Claude Code | 真实 CLI＋受控模型协议验证通过；真实上游模型验收待完成 |
+| Kimi | 尚未实现 |
+
+CLI 适配复用同一 API、调度器和验收协议。当前只开放任务授权的系统工具及工作区读写，不开放任意原生 shell、subagent 或后台任务；支持当前原生会话续接，不提供历史会话快照或外部副作用重放。CLI 的模型请求次数无法可靠实施硬上限，因此相应预算明确不支持。
 
 ## 开始使用
 
-### 1. 安装
+### 1. 安装并接入 Pi
+
+下面是当前的源码安装流程，只需安装运行依赖，使用前不需要安装 pytest 或运行开发测试。统一安装与自动配置仍是后续工作。
 
 在取得源码后进入仓库根目录。需要 **Python 3.11+**，以及已安装、已配置模型的 **[Pi CLI](https://github.com/earendil-works/pi/tree/main/packages/coding-agent)**（`@earendil-works/pi-coding-agent`）。本次回归使用 Pi `1.5.0`、Node.js `22.22.2`，包含真实 RPC 接入检查；终端面板的历史界面验证使用 Pi `0.87.1`。
 
@@ -125,6 +136,22 @@ pi
 | `/agentgenome off` | 关闭本会话模式；后台服务与任务继续运行 |
 
 退出 Pi 也不会停止服务。需要暂停或取消业务时，让 Teacher 对指定 Run 调用控制工具，并核对返回状态。完整操作见 [Pi 接入说明](docs/pi-extension.md)。
+
+### 4. 可选：部署 CLI 执行后端
+
+已完成 Python 包安装，并为所选 CLI 配置好认证后，可以启动单独的服务。以下示例使用 Codex；模型名称及配置目录需替换为实际值：
+
+```bash
+.venv/bin/agentgenome serve \
+  --data-dir "$HOME/.local/state/agentgenome/codex" \
+  --backend codex \
+  --model YOUR_MODEL \
+  --config-dir "$HOME/.codex"
+```
+
+`serve` 在前台运行。将 `--backend` 换成 `qoder` 或 `claude` 时，也应更换对应的模型与配置目录；可用 `--executable` 指定 CLI 路径。Graph 的 Agent 定义通过 `backend_ref` 引用服务注册的后端。这个独立服务不会自动替换 Pi 默认连接的服务。
+
+CLI 后端不使用 Pi 的 `--provider`。为隔离工具权限，适配器不会完整继承 CLI 的 hooks、插件与 MCP 配置；Codex 的用户 `config.toml` 也被排除，因此其中的自定义 provider 配置目前不能直接复用。模型连接配置复用与安装简化仍需继续完善。
 
 ## 系统结构
 
