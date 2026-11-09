@@ -30,3 +30,6 @@ runs/
 .env.*
 !.env.example
 .DS_Store
+
+# Local development specifications and supervision notes
+/specs/
