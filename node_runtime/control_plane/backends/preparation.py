@@ -694,4 +694,3 @@ class WorkerPreparation:
         else:
             lines.append("Do not ask questions. Do not wait for further input.")
         return "\n".join(lines)
-
