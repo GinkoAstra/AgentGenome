@@ -1436,7 +1436,18 @@ class Api:
         }
 
     @staticmethod
-    def _worker_view(row: Any) -> dict[str, Any]:
+    def _worker_view(row: Any, tx: Tx) -> dict[str, Any]:
+        # Stored cumulative counts are lower bounds. Only expose a count as
+        # current when this epoch's latest observation actually supplies it.
+        # Keep the durable totals and epoch reconciliation checks unchanged.
+        observation = tx.one(
+            "SELECT payload_json FROM events WHERE run_id = ? AND worker_id = ?"
+            " AND epoch = ? AND kind = 'worker_observed' ORDER BY seq DESC LIMIT 1",
+            (row["run_id"], row["worker_id"], row["epoch"]),
+        )
+        known = (load(observation["payload_json"]).get("usage") or {}
+                 if observation is not None else {})
+        totals = load(row["usage_json"]) or {}
         return {
             "format": R.RESOURCE_FORMAT,
             "kind": "worker",
@@ -1457,7 +1468,8 @@ class Api:
             "tool_profile": load(row["tool_profile_json"]),
             "budget": load(row["budget_json"]),
             "required_capabilities": load(row["required_capabilities_json"]) or {},
-            "usage": load(row["usage_json"]) or {"provider_calls": 0, "tool_calls": 0},
+            "usage": {name: value for name, value in totals.items() if name in known},
+            "usage_lower_bound": totals,
             "activities": load(row["activities_json"]) or [],
             "activities_complete": bool(row["activities_complete"]),
             "checkpoint": load(row["checkpoint_json"]),
@@ -1838,7 +1850,7 @@ class Api:
             if kind == "worker":
                 row = self._worker(tx, identifier)
                 actor.require_read(row["run_id"])
-                return self._worker_view(row)
+                return self._worker_view(row, tx)
             if kind == "candidate":
                 row = self._candidate(tx, identifier)
                 actor.require_read(row["run_id"])
@@ -1963,7 +1975,7 @@ class Api:
                 "format": R.RESOURCE_FORMAT,
                 "run": self._run_view(run),
                 "nodes": node_views,
-                "workers": [self._worker_view(row) for row in workers],
+                "workers": [self._worker_view(row, tx) for row in workers],
                 "candidates": [self._candidate_view(row) for row in candidates],
                 "expansions": [row["expansion_id"] for row in expansions],
                 "expansion_requests": [{"expansion_id": row["expansion_id"],
@@ -2247,7 +2259,7 @@ class Api:
                 R.fail("candidate_mismatch",
                        "the execution already holds the current contract",
                        worker_id=worker["worker_id"])
-            if not execution_stopped(self._worker_view(worker)):
+            if not execution_stopped(self._worker_view(worker, tx)):
                 R.fail("invalid_argument",
                        "the superseded execution has not been observed stopped",
                        worker_id=worker["worker_id"])
@@ -3003,7 +3015,9 @@ class Api:
         )
         node = self._node(tx, worker["node_id"], run["run_id"])
         return {"worker_id": worker["worker_id"], "observed": item["observed"],
-                "usage": usage, "activities": projection,
+                "usage": {name: value for name, value in usage.items()
+                          if name in (item.get("usage") or {})},
+                "usage_lower_bound": usage, "activities": projection,
                 "activities_complete": projection_complete,
                 "revision": new_revision, "event_id": event_id,
                 "seq": seq, "node_state": node["state"]}

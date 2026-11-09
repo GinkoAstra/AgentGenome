@@ -17,7 +17,8 @@ from pathlib import Path
 FORMAT = "agentgenome-spawn/1"
 
 
-def _process_start(pid: int) -> int | None:
+def process_start(pid: int) -> int | None:
+    """Kernel start time of a pid, used to reject a recycled pid."""
     try:
         line = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except OSError:
@@ -62,7 +63,7 @@ def main(argv: list[str]) -> int:
     _write_json(record_path, {
         "format": FORMAT,
         "pid": pid,
-        "process_start": _process_start(pid),
+        "process_start": process_start(pid),
         "delivery_key": delivery_key,
         "argv0": command[0],
     })

@@ -31,11 +31,11 @@ const PROVIDER = "llama-local";
 const MODEL = "qwen3.5-2b";
 const NATIVE_TOOLS = ["read", "bash", "edit", "write"];
 // The advertised surface belongs to the service, not this harness. Reading it
-// from the shipped module keeps activation-parity checks correct when the
-// public tool set grows.
+// from the shared operation list keeps activation-parity checks correct when
+// the public tool set grows, without loading the MCP SDK in this process.
 const expectedTools = spawnSync(
   python,
-  ["-c", "from node_runtime.control_plane.mcp_server import TOOL_NAMES; print('\\n'.join(TOOL_NAMES))"],
+  ["-c", "from node_runtime.control_plane.http_api import PUBLIC_OPERATIONS; print('\\n'.join(PUBLIC_OPERATIONS))"],
   { cwd: root, encoding: "utf8", env: { ...process.env, PYTHONPATH: root } },
 ).stdout.trim().split("\n").filter(Boolean);
 

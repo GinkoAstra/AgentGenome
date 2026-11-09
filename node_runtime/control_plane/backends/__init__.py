@@ -10,6 +10,7 @@ from .base import (
     StopReceipt,
     WorkerSpec,
 )
+from .cli import CliBackend
 from .pi import PiBackend
 from .script import ScriptBackend
 
@@ -18,6 +19,7 @@ __all__ = [
     "BackendError",
     "Capabilities",
     "CheckpointRef",
+    "CliBackend",
     "DeliveryReceipt",
     "Handle",
     "Observation",

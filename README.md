@@ -42,6 +42,12 @@ AgentGenome 将任务定义、执行实例和验收结果分别记录：用 YAML
 - **状态可恢复**：期望状态与执行事实分开保存，通过条件更新、幂等请求和执行身份协调恢复。
 - **过程可查看**：Pi 终端面板、HTTP 快照、SSE 订阅和命令行使用同一服务的 trace 数据。
 
+## CLI 执行后端
+
+除 Pi／Script 外，现支持 Codex CLI、Qoder CLI 与 Claude Code 执行后端，继续通过同一 API、调度器和验收协议运行。详见 [配置与使用](specs/CLI_ADAPTER_USAGE.md) 和 [交付范围](specs/CLI_ADAPTER_STATUS.md)。
+
+Codex／Qoder 已通过真实模型候选、退回、同会话续接、接受闭环；Claude 已通过真实 CLI＋受控模型协议验证，真实上游验收待完成。Kimi 尚未实现。统一安装与自动配置简化仍是后续工作，本次不宣称已提供。
+
 ## 开始使用
 
 ### 1. 安装

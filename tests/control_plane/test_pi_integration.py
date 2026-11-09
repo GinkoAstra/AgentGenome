@@ -12,6 +12,7 @@ import io
 import json
 import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,9 +20,10 @@ import pytest
 
 from node_runtime.control_plane import host as host_module
 from node_runtime.control_plane import pi_integration
-from node_runtime.control_plane.mcp_server import TOOL_NAMES
+from node_runtime.control_plane.http_api import PUBLIC_OPERATIONS
 from node_runtime.control_plane.resources import ControlPlaneError
 
+ROOT = Path(__file__).resolve().parents[2]
 PROVIDER = "llama-local"
 MODEL = "qwen3.5-2b"
 
@@ -118,6 +120,46 @@ def test_install_honours_PI_CODING_AGENT_DIR(tmp_path, monkeypatch):
     assert (agent / "extensions" / "agentgenome.js").is_file()
 
 
+def _python_without_mcp(script: str) -> subprocess.CompletedProcess:
+    blocker = (
+        "import sys\n"
+        "class _NoMCP:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'mcp' or name.startswith('mcp.'):\n"
+        "            raise ImportError('mcp is unavailable in this process')\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _NoMCP())\n"
+    )
+    environment = {**os.environ, "PYTHONPATH": str(ROOT),
+                   "PYTHONDONTWRITEBYTECODE": "1"}
+    return subprocess.run([sys.executable, "-c", blocker + script],
+                          cwd=str(ROOT), env=environment,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_install_and_teacher_import_do_not_load_the_mcp_sdk(tmp_path):
+    agent = tmp_path / "agent"
+    script = (
+        "import json\n"
+        "from node_runtime.control_plane import pi_integration, teacher_entry\n"
+        f"result = pi_integration.install(provider={PROVIDER!r}, "
+        f"model={MODEL!r}, agent_dir={str(agent)!r})\n"
+        "loaded = sorted(name for name in sys.modules\n"
+        "                if name == 'mcp' or name.startswith('mcp.'))\n"
+        "print(json.dumps({'state': result['state'],\n"
+        "                  'tools': len(teacher_entry.teacher_tools()),\n"
+        "                  'mcp_modules': loaded}))\n"
+    )
+    done = _python_without_mcp(script)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert json.loads(done.stdout) == {
+        "state": "created",
+        "tools": 4 + len(PUBLIC_OPERATIONS),
+        "mcp_modules": [],
+    }
+    assert (agent / "extensions" / "agentgenome.js").is_file()
+
+
 def test_prepare_starts_and_reuses_the_real_service(data_dir, tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -132,7 +174,7 @@ def test_prepare_starts_and_reuses_the_real_service(data_dir, tmp_path):
     assert first["host_status"]["running"] is True
     pid = first["host_status"]["pid"]
     assert isinstance(pid, int)
-    assert first["tool_names"] == list(TOOL_NAMES)
+    assert first["tool_names"] == list(PUBLIC_OPERATIONS)
 
     config = json.loads(first["mcp_config"])
     assert config["format"] == "agentgenome-teacher-mcp/2"

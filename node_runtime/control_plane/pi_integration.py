@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from . import discovery, teacher_entry
-from .mcp_server import TOOL_NAMES
+from .http_api import PUBLIC_OPERATIONS as TOOL_NAMES
 from .resources import ControlPlaneError
 
 INSTALL_FORMAT = "agentgenome-pi-install/1"

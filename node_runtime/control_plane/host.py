@@ -26,9 +26,7 @@ import os
 import signal
 import subprocess
 import sys
-import threading
 import time
-import traceback
 import types
 import uuid
 from contextlib import contextmanager
@@ -38,8 +36,11 @@ from typing import Any, Iterator
 
 from . import discovery
 from .api import Api
+from .backends.base import BackendError
+from .backends.cli import CliBackend
 from .backends.pi import PiBackend
 from .backends.script import ScriptBackend
+from .backends.spawn import process_start
 from .client import ApiClient, ApiTransportError
 from .controller import Controller
 from .execution_facts import execution_stopped
@@ -49,6 +50,47 @@ from .scheduler import Scheduler
 HOST_FORMAT = "agentgenome-host/1"
 STATUS_FORMAT = "agentgenome-host-status/1"
 TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled"})
+CLI_BACKENDS = ("codex", "qoder", "claude")
+HOST_BACKENDS = ("pi", "script", *CLI_BACKENDS, "kimi")
+CLI_EXECUTABLES = {"codex": "codex", "qoder": "qodercli", "claude": "claude"}
+
+
+def _resolve_runtime(backend: str, provider: str | None,
+                     model: str | None, executable: str | None
+                     ) -> tuple[str | None, str | None, str | None]:
+    """Fill deployment defaults per backend; never leak Pi's model into a CLI."""
+    if backend == "kimi":
+        raise ControlPlaneError(
+            "capability_unsupported",
+            "the Kimi CLI adapter is not implemented: the installed protocol "
+            "has not been verified (MoonshotAI/kimi-code differs from the old "
+            "Python kimi-cli)")
+    if backend not in HOST_BACKENDS:
+        raise ControlPlaneError("capability_unsupported",
+                                "unknown host backend", backend=backend)
+    if backend == "pi":
+        return (provider or "llama-local", model or "qwen3.5-2b",
+                executable or "pi")
+    if backend in CLI_BACKENDS:
+        if provider not in (None, ""):
+            raise ControlPlaneError(
+                "invalid_argument",
+                "--provider is only valid for the Pi backend; CLI backends "
+                "use the executable's own provider configuration",
+                backend=backend)
+        return (None, model, executable or CLI_EXECUTABLES[backend])
+    return (provider, model, executable)
+
+
+def _resolved_config_dir(value: str | Path | None) -> Path | None:
+    if value in (None, ""):
+        return None
+    try:
+        return Path(value).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ControlPlaneError(
+            "not_found", "the CLI configuration directory does not exist",
+            config_dir=str(value)) from error
 
 
 def _now() -> str:
@@ -70,23 +112,65 @@ def _read_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _process_start(pid: int) -> int | None:
-    try:
-        line = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
-        return int(line[line.rindex(")") + 2:].split()[19])
-    except (ValueError, IndexError):
-        return None
-
-
 def _pid_alive(pid: int, started: int | None = None) -> bool:
     try:
         os.kill(pid, 0)
     except OSError:
         return False
-    return started is None or _process_start(pid) == started
+    return started is None or process_start(pid) == started
+
+
+def _process_state(pid: int) -> str | None:
+    try:
+        line = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        return line[line.rindex(")") + 2]
+    except (ValueError, IndexError):
+        return None
+
+
+def _process_gone(pid: int) -> bool:
+    """True only when the kernel reports that the pid no longer exists."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _process_finished(pid: int, started: int) -> bool:
+    """True when the recorded owner exited or is an unreaped zombie.
+
+    A zombie still answers kill(pid, 0) until its parent reaps it; it has no
+    control work left, so stop must not wait for the reaper. When procfs
+    cannot be read, only ESRCH proves the owner is gone; a permission or
+    transient read failure stays unknown and keeps polling.
+    """
+    current = process_start(pid)
+    if current is None:
+        return _process_gone(pid)
+    if current != started:
+        return True
+    return _process_state(pid) in ("Z", "X", "x")
+
+
+def _record_dir_matches(record: dict[str, Any], data_dir: Path) -> bool:
+    value = record.get("data_dir")
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        return Path(value).resolve() == data_dir
+    except (OSError, RuntimeError):
+        return False
+
+
+def _ended(record: dict[str, Any] | None) -> bool:
+    return (record is None or record.get("stopped_at") is not None
+            or not record.get("pid"))
 
 
 @contextmanager
@@ -220,8 +304,8 @@ class Host:
     """Composition root for one Scheduler and one Controller."""
 
     def __init__(self, data_dir: str | Path, *, backend: str = "pi",
-                 provider: str = "llama-local", model: str = "qwen3.5-2b",
-                 executable: str = "pi", controller_id: str = "ctl-1",
+                 provider: str | None = None, model: str | None = None,
+                 executable: str | None = None, controller_id: str = "ctl-1",
                  scheduler_id: str = "scheduler",
                  scheduler_interval: float = 1.0,
                  poll_seconds: float = 0.2,
@@ -229,6 +313,7 @@ class Host:
                  instance_id: str | None = None,
                  lock_timeout: float = 10.0,
                  script_agent: str | None = None,
+                 config_dir: str | Path | None = None,
                  load_script_agent: bool = True) -> None:
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -236,9 +321,17 @@ class Host:
         self.instance_id = instance_id or uuid.uuid4().hex
         self.lock_timeout = lock_timeout
         self.backend_ref = backend
+        provider, model, executable = _resolve_runtime(
+            backend, provider, model, executable)
         self.provider = provider
         self.model = model
         self.executable = executable
+        self.config_dir = _resolved_config_dir(config_dir)
+        if self.config_dir is not None and backend not in CLI_BACKENDS:
+            raise ControlPlaneError(
+                "invalid_argument",
+                "--config-dir applies only to a CLI backend",
+                backend=backend)
         self.controller_id = controller_id
         self.scheduler_id = scheduler_id
         self.scheduler_interval = scheduler_interval
@@ -272,6 +365,23 @@ class Host:
         elif backend == "script":
             backends["script"] = ScriptBackend(
                 self.data_dir, agent=agent, identity=identity)
+        elif backend in CLI_BACKENDS:
+            instance = CliBackend(
+                self.data_dir, backend=backend,
+                executable=self.executable or CLI_EXECUTABLES[backend],
+                model=self.model, config_dir=self.config_dir,
+                max_wall_seconds=max_wall_seconds,
+                artifact_reader=self.api.artifacts.read,
+            )
+            # Fail the service startup, not a later Controller tick, when the
+            # deployment's executable or configuration reference is missing.
+            instance.protocol.check()
+            backends[backend] = instance
+            if identity is not None:
+                # A CLI host still attaches the trusted local program Checker;
+                # only an explicit deployment flag can name that code.
+                backends["script"] = ScriptBackend(
+                    self.data_dir, agent=agent, identity=identity)
         else:
             raise ControlPlaneError("capability_unsupported",
                                     "unknown host backend", backend=backend)
@@ -417,6 +527,11 @@ class Host:
                         self._log("controller_error", run_id=run_id,
                                   worker_id=worker["worker_id"],
                                   code=error.code, message=error.message)
+                    except BackendError as error:
+                        self._log("controller_error", run_id=run_id,
+                                  worker_id=worker["worker_id"],
+                                  code=error.code, message=str(error),
+                                  details=error.details)
                     continue
                 try:
                     result = self.controller.reconcile(
@@ -431,6 +546,11 @@ class Host:
                     self._log("controller_error", run_id=run_id,
                               worker_id=worker["worker_id"],
                               code=error.code, message=error.message)
+                except BackendError as error:
+                    self._log("controller_error", run_id=run_id,
+                              worker_id=worker["worker_id"],
+                              code=error.code, message=str(error),
+                              details=error.details)
         return {"actions": actions, "runs": len(runs), "status": self.status()}
 
     def _claim(self) -> dict[str, Any] | None:
@@ -457,12 +577,13 @@ class Host:
             "format": HOST_FORMAT,
             "instance_id": self.instance_id,
             "pid": os.getpid(),
-            "process_start": _process_start(os.getpid()),
+            "process_start": process_start(os.getpid()),
             "data_dir": str(self.data_dir),
             "backend": self.backend_ref,
             "provider": self.provider,
             "model": self.model,
             "executable": self.executable,
+            "config_dir": str(self.config_dir) if self.config_dir else None,
             "script_agent": self.script_agent_identity,
             "controller_id": self.controller_id,
             "scheduler_id": self.scheduler_id,
@@ -479,38 +600,12 @@ class Host:
                   instance_id=self.instance_id)
         return None
 
-    def _loop(self) -> int:
-        stop = threading.Event()
-
-        def stop_handler(signum: int, _frame: Any) -> None:
-            self._log("signal", signal=signum)
-            stop.set()
-
-        signal.signal(signal.SIGTERM, stop_handler)
-        signal.signal(signal.SIGINT, stop_handler)
-        try:
-            while not stop.is_set():
-                try:
-                    self.reconcile_once()
-                except Exception as error:  # keep the service loop alive
-                    self._log("host_error", error=repr(error),
-                              trace=traceback.format_exc())
-                stop.wait(self.scheduler_interval)
-        finally:
-            record = self.record()
-            if (record and record.get("pid") == os.getpid()
-                    and record.get("instance_id") == self.instance_id):
-                record["stopped_at"] = _now()
-                _write_json(self._host_record, record)
-            self._log("host_stopped", pid=os.getpid(),
-                      instance_id=self.instance_id)
-        return 0
-
     def claim(self) -> dict[str, Any] | None:
         """Atomically publish this process as the directory owner.
 
-        Shared by the blocking Host loop and ApiServer so a data directory has
-        exactly one execution host. Returns a refusal record, or None on claim.
+        ApiServer calls this once at startup before binding its socket, so a
+        data directory has exactly one execution host. Returns a refusal
+        record, or None on claim.
         """
         with _bootstrap_lock(self.data_dir, self.lock_timeout):
             return self._claim()
@@ -530,13 +625,6 @@ class Host:
             record["process_start"] = None
             _write_json(self._host_record, record)
 
-    def serve(self) -> int:
-        refusal = self.claim()
-        if refusal is not None:
-            print(json.dumps(refusal, indent=2), file=sys.stderr)
-            return 2
-        return self._loop()
-
 
 def _host_from_args(args: argparse.Namespace, *,
                     load_script_agent: bool = True) -> Host:
@@ -550,6 +638,7 @@ def _host_from_args(args: argparse.Namespace, *,
         instance_id=getattr(args, "instance_id", None),
         lock_timeout=args.lock_timeout,
         script_agent=getattr(args, "script_agent", None),
+        config_dir=getattr(args, "config_dir", None),
         load_script_agent=load_script_agent,
     )
 
@@ -558,10 +647,19 @@ def _add_host_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data-dir", default=None,
                         help="service data directory "
                              "(default: $XDG_STATE_HOME/agentgenome/default)")
-    parser.add_argument("--backend", choices=("pi", "script"), default="pi")
-    parser.add_argument("--provider", default="llama-local")
-    parser.add_argument("--model", default="qwen3.5-2b")
-    parser.add_argument("--executable", default="pi")
+    parser.add_argument("--backend", choices=HOST_BACKENDS, default="pi")
+    parser.add_argument("--provider", default=None,
+                        help="Pi provider (rejected for CLI backends)")
+    parser.add_argument("--model", default=None,
+                        help="deployment model; Pi falls back to its local "
+                             "default, a CLI uses its own configured default "
+                             "when omitted")
+    parser.add_argument("--executable", default=None,
+                        help="CLI executable (default: codex/qodercli/claude "
+                             "per backend; pi for the Pi backend)")
+    parser.add_argument("--config-dir", default=None,
+                        help="read-only CLI configuration directory "
+                             "(CODEX_HOME/CLAUDE_CONFIG_DIR/qoder --config-dir)")
     parser.add_argument("--script-agent", default=None,
                         metavar="FILE.py:FACTORY",
                         help="trusted local program-Checker factory "
@@ -578,7 +676,15 @@ def _command_serve(args: argparse.Namespace) -> int:
     """Own the database and network lifecycle in this one process."""
     from .server import ApiServer
 
-    host = _host_from_args(args)
+    try:
+        host = _host_from_args(args)
+    except (ControlPlaneError, BackendError) as error:
+        print(json.dumps({
+            "error": getattr(error, "code", "backend_unavailable"),
+            "message": getattr(error, "message", str(error)),
+            **getattr(error, "details", {}),
+        }, indent=2), file=sys.stderr)
+        return 2
     server = ApiServer(host, bind=args.bind, port=args.port)
     return server.serve()
 
@@ -611,12 +717,22 @@ def _command_status(args: argparse.Namespace) -> int:
 def _config_mismatch(record: dict[str, Any],
                      args: argparse.Namespace) -> dict[str, Any] | None:
     mismatch: dict[str, Any] = {}
-    for field in ("backend", "provider", "model", "executable",
-                  "controller_id", "scheduler_id"):
+    provider, model, executable = _resolve_runtime(
+        args.backend, args.provider, args.model, args.executable)
+    config_dir = _resolved_config_dir(getattr(args, "config_dir", None))
+    requested = {
+        "backend": args.backend,
+        "provider": provider,
+        "model": model,
+        "executable": executable,
+        "config_dir": str(config_dir) if config_dir is not None else None,
+        "controller_id": args.controller_id,
+        "scheduler_id": args.scheduler_id,
+    }
+    for field, value in requested.items():
         current = record.get(field)
-        requested = getattr(args, field)
-        if current is not None and current != requested:
-            mismatch[field] = {"running": current, "requested": requested}
+        if current != value:
+            mismatch[field] = {"running": current, "requested": value}
     requested_script = None
     if getattr(args, "script_agent", None):
         requested_script = _script_identity(args.script_agent)
@@ -641,6 +757,14 @@ def _terminate(process: subprocess.Popen, timeout: float = 5.0) -> None:
 
 def _command_start(args: argparse.Namespace) -> int:
     data_dir = discovery.resolve_data_dir(args.data_dir)
+    try:
+        provider, model, executable = _resolve_runtime(
+            args.backend, args.provider, args.model, args.executable)
+        config_dir = _resolved_config_dir(getattr(args, "config_dir", None))
+    except ControlPlaneError as error:
+        print(json.dumps({"error": error.code, "message": error.message,
+                          **error.details}, indent=2), file=sys.stderr)
+        return 2
     pending: dict[str, Any]
     with _bootstrap_lock(data_dir, args.start_timeout):
         # Bootstrap never constructs Host/Api: only the detached serve process
@@ -692,8 +816,7 @@ def _command_start(args: argparse.Namespace) -> int:
             command = [sys.executable, "-m",
                        "node_runtime.control_plane.host", "serve",
                        "--data-dir", str(data_dir),
-                       "--backend", args.backend, "--provider", args.provider,
-                       "--model", args.model, "--executable", args.executable,
+                       "--backend", args.backend,
                        "--controller-id", args.controller_id,
                        "--scheduler-id", args.scheduler_id,
                        "--interval", str(args.interval),
@@ -702,6 +825,14 @@ def _command_start(args: argparse.Namespace) -> int:
                        "--lock-timeout", str(args.lock_timeout),
                        "--bind", args.bind, "--port", str(args.port),
                        "--instance-id", token]
+            if provider is not None:
+                command += ["--provider", provider]
+            if model is not None:
+                command += ["--model", model]
+            if executable is not None:
+                command += ["--executable", executable]
+            if config_dir is not None:
+                command += ["--config-dir", str(config_dir)]
             if getattr(args, "script_agent", None):
                 identity = _script_identity(args.script_agent)
                 command += [
@@ -722,7 +853,7 @@ def _command_start(args: argparse.Namespace) -> int:
                     stderr=subprocess.STDOUT, start_new_session=True)
             _write_json(data_dir / "host.launch.json", {
                 "instance_id": token, "pid": process.pid,
-                "process_start": _process_start(process.pid),
+                "process_start": process_start(process.pid),
                 "started_at": _now(),
             })
             pending = {"kind": "own", "process": process, "token": token}
@@ -771,44 +902,98 @@ def _command_start(args: argparse.Namespace) -> int:
 
 
 def _command_stop(args: argparse.Namespace) -> int:
+    """Stop the process that owns this directory, without trusting argv.
+
+    The durable host record (pid + kernel start time + instance + resolved
+    directory) is the ownership identity. The service record corroborates it
+    when live. A foreground or console launch therefore stops the same way as
+    a detached one, and an unconfirmed identity is never signalled.
+    """
     data_dir = discovery.resolve_data_dir(args.data_dir)
     with _bootstrap_lock(data_dir, args.timeout):
-        record = discovery.read_record(data_dir)
-        if record is None or not record.get("pid"):
+        service = discovery.read_record(data_dir)
+        host = _read_json(data_dir / "host.json")
+        if not isinstance(host, dict) or host.get("format") != HOST_FORMAT:
+            host = None
+        service_live = not _ended(service)
+        host_live = not _ended(host)
+
+        if not host_live:
+            if service_live:
+                print(json.dumps({
+                    "error": "ownership_identity_incomplete",
+                    "detail": "a live service record has no host ownership record",
+                    "pid": service.get("pid"),
+                }, indent=2), file=sys.stderr)
+                return 1
+            stale = (host or service or {}).get("pid")
             print(json.dumps({"running": False,
-                              "data_dir": str(data_dir)}, indent=2))
+                              **({"stale_pid": stale} if stale else {})},
+                             indent=2))
             return 0
-        pid = int(record["pid"])
-        if not _pid_alive(pid):
-            print(json.dumps({"running": False, "stale_pid": pid},
+
+        pid = host.get("pid")
+        started = host.get("process_start")
+        if (not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+                or not isinstance(started, int) or isinstance(started, bool)):
+            print(json.dumps({
+                "error": "ownership_identity_incomplete",
+                "detail": "host record lacks a pid or kernel start time",
+                "pid": pid, "process_start": started,
+            }, indent=2), file=sys.stderr)
+            return 1
+        instance_id = host.get("instance_id")
+        if (pid == os.getpid()
+                or not _record_dir_matches(host, data_dir)
+                or not isinstance(instance_id, str) or not instance_id):
+            print(json.dumps({
+                "error": "ownership_identity_conflict",
+                "detail": "host record does not name this directory and instance",
+                "pid": pid, "data_dir": host.get("data_dir"),
+                "instance_id": instance_id,
+            }, indent=2), file=sys.stderr)
+            return 1
+        if service_live:
+            if (service.get("pid") != pid
+                    or service.get("instance_id") != instance_id
+                    or not _record_dir_matches(service, data_dir)):
+                print(json.dumps({
+                    "error": "ownership_identity_conflict",
+                    "detail": "service and host records disagree",
+                    "pid": pid, "service_pid": service.get("pid"),
+                    "service_instance_id": service.get("instance_id"),
+                    "host_instance_id": instance_id,
+                }, indent=2), file=sys.stderr)
+                return 1
+
+        current = process_start(pid)
+        if current is None:
+            if _process_gone(pid):
+                print(json.dumps({"running": False, "stale_pid": pid},
+                                 indent=2))
+                return 0
+            print(json.dumps({
+                "error": "ownership_identity_unverified",
+                "detail": "the recorded pid is alive but its kernel identity "
+                          "could not be read",
+                "pid": pid,
+            }, indent=2), file=sys.stderr)
+            return 1
+        if current != started:
+            print(json.dumps({"running": False, "recycled_pid": pid},
                              indent=2))
             return 0
         try:
-            argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-        except OSError:
-            argv = []
-        if (b"node_runtime.control_plane.host" not in argv
-                or str(data_dir).encode() not in argv):
-            print(json.dumps({"error": "pid does not belong to this service",
-                              "pid": pid}, indent=2), file=sys.stderr)
+            os.kill(pid, signal.SIGTERM)
+        except OSError as error:
+            print(json.dumps({"error": "stop_not_permitted", "pid": pid,
+                              "detail": str(error)}, indent=2),
+                  file=sys.stderr)
             return 1
-        instance_id = record.get("instance_id")
-        if instance_id:
-            try:
-                index = argv.index(b"--instance-id")
-                recorded = argv[index + 1].decode("utf-8", "replace")
-            except (ValueError, IndexError):
-                recorded = None
-            if recorded != instance_id:
-                print(json.dumps({
-                    "error": "pid does not match the recorded service instance",
-                    "pid": pid, "instance_id": instance_id,
-                }, indent=2), file=sys.stderr)
-                return 1
-        os.kill(pid, signal.SIGTERM)
+
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
-            if not _pid_alive(pid) and not discovery.status(data_dir)["running"]:
+            if _process_finished(pid, started):
                 print(json.dumps({"running": False, "stopped_pid": pid},
                                  indent=2))
                 return 0

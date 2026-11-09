@@ -1358,7 +1358,7 @@ class Scheduler:
         measured against the effective Run budget.
         """
         budget = worker.get("budget") or (run or {}).get("budget") or {}
-        usage = worker.get("usage") or {}
+        usage = worker.get("usage_lower_bound") or worker.get("usage") or {}
         caps = {"provider_calls": budget.get("max_provider_calls"),
                 "tool_calls": budget.get("max_tool_calls")}
         return [name for name, cap in caps.items()
@@ -1647,7 +1647,7 @@ class Scheduler:
                                 reviewer_worker_id=worker["worker_id"],
                                 candidate_id=candidate["candidate_id"],
                                 budget=exhausted,
-                                usage=dict(worker.get("usage") or {}))
+                                usage=dict(worker.get("usage_lower_bound") or worker.get("usage") or {}))
                 changed = True
                 snap = self._snapshot(run_id)
                 continue
@@ -1888,7 +1888,7 @@ class Scheduler:
                                 "node_id": node["node_id"],
                                 "worker_id": worker["worker_id"],
                                 "budget": exhausted,
-                                "usage": dict(worker.get("usage") or {}),
+                                "usage": dict(worker.get("usage_lower_bound") or worker.get("usage") or {}),
                                 "phase": "revision"})
                 changed = True
                 continue
@@ -1940,7 +1940,7 @@ class Scheduler:
                                 phase="child_accepted",
                                 child_node_id=child["node_id"],
                                 budget=exhausted,
-                                usage=dict(worker.get("usage") or {}))
+                                usage=dict(worker.get("usage_lower_bound") or worker.get("usage") or {}))
                 changed = True
                 continue
             candidate = next((item for item in snap["candidates"]
@@ -1990,7 +1990,7 @@ class Scheduler:
                 self._fail_node(run_id, parent, "join_budget_exhausted", actions,
                                 expansion_id=expansion_id,
                                 budget=exhausted,
-                                usage=dict(worker.get("usage") or {}))
+                                usage=dict(worker.get("usage_lower_bound") or worker.get("usage") or {}))
                 changed = True
                 continue
             payload = {
@@ -2087,7 +2087,7 @@ class Scheduler:
                                 child_node_id=child["node_id"],
                                 worker_id=worker["worker_id"],
                                 budget=exhausted,
-                                usage=dict(worker.get("usage") or {}))
+                                usage=dict(worker.get("usage_lower_bound") or worker.get("usage") or {}))
                 changed = True
                 snap = self._snapshot(run_id)
                 continue
@@ -2173,7 +2173,7 @@ class Scheduler:
                             decision_id=decision["decision_id"],
                             child_node_id=decision["node_id"],
                             worker_id=worker["worker_id"],
-                            budget=exhausted, usage=dict(worker.get("usage") or {}))
+                            budget=exhausted, usage=dict(worker.get("usage_lower_bound") or worker.get("usage") or {}))
             return True
         limit = self._budget(snap, parent).get("max_continuations")
         if limit is None:
@@ -2298,7 +2298,7 @@ class Scheduler:
                                 phase="continuation",
                                 worker_id=worker["worker_id"],
                                 budget=exhausted,
-                                usage=dict(worker.get("usage") or {}))
+                                usage=dict(worker.get("usage_lower_bound") or worker.get("usage") or {}))
                 changed = True
                 continue
             # A zero-usage Backend can end turns forever without ever meeting a

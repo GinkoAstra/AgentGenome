@@ -162,7 +162,12 @@ class ScriptBackend(AgentBackend):
                         "capability_unsupported",
                         "the committed execution spec changed for this execution",
                         fields=changed)
-                self._require_identity(state)
+                # A committed stop only needs the persisted execution binding
+                # above to find the handle it must stop. The current program
+                # identity is checked when active work is resumed; requiring it
+                # here would let a changed program block cancellation forever.
+                if spec.desired != "stopped":
+                    self._require_identity(state)
             else:
                 state = {
                     "format": FORMAT,
@@ -222,6 +227,10 @@ class ScriptBackend(AgentBackend):
                 )
             if state.get("stop") and state["stop"].get("requested_at"):
                 raise BackendError("stopped", "stop was requested; no new delivery is accepted")
+            # A stop-only start intentionally skips the current program
+            # identity so cancellation stays available, but executing through
+            # that handle must still refuse a changed program.
+            self._require_identity(state)
             unknown = [key for key in state["order"]
                        if state["deliveries"][key]["state"] == "unknown"]
             if unknown:

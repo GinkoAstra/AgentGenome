@@ -1,11 +1,11 @@
-"""Network service composition for the existing control plane.
+"""The installed network service for the control plane.
 
-P1: one ApiServer owns the existing Host (Api, Scheduler, Controller and
-configured Backends), exposes an explicit operation surface over HTTP and
-MCP, and runs the reconciliation loop on a separate thread. Host remains the
-owner of the application objects; this module only adds the service boundary.
-
-The installed Host command is not switched here; that is P2.
+One ApiServer owns the Host (Api, Scheduler, Controller and configured
+Backends), exposes an explicit operation surface over HTTP and MCP through a
+single dispatcher and Api, and runs the reconciliation loop on a separate
+thread. Host remains the owner of the application objects; this module adds
+the network boundary, and ``agentgenome serve`` starts this server. There is
+no alternate in-process serving loop.
 """
 from __future__ import annotations
 

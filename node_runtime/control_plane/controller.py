@@ -62,7 +62,7 @@ class Controller:
             context=worker["context"], tool_profile=worker["tool_profile"],
             budget=worker["budget"] or run["budget"],
             checkpoint_ref=worker["checkpoint"],
-            usage=worker.get("usage") or {},
+            usage=worker.get("usage_lower_bound") or worker.get("usage") or {},
             required_capabilities=worker.get("required_capabilities") or {},
         )
 
@@ -236,8 +236,10 @@ class Controller:
             "intent_seq": worker["intent_seq"],
             "observed": observation.observed,
             "observation_id": int(observation.observation_id),
-            "usage": {"provider_calls": int(observation.provider_calls),
-                      "tool_calls": int(observation.tool_calls)},
+            "usage": {name: int(value) for name, value in (
+                ("provider_calls", observation.provider_calls),
+                ("tool_calls", observation.tool_calls),
+            ) if value is not None},
             "activities": [dict(activity) for activity in observation.activities],
             # Backend evidence is copied verbatim so the API's strict boolean
             # check can reject an invalid completeness value instead of a

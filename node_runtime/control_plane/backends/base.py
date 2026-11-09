@@ -135,8 +135,10 @@ class Observation:
     delivery_key: str | None = None
     result: Mapping[str, Any] | None = None
     error: Mapping[str, Any] | None = None
-    provider_calls: int = 0
-    tool_calls: int = 0
+    # None means this source cannot observe the count. Never estimate a model
+    # request count from the number of CLI invocations or completed messages.
+    provider_calls: int | None = 0
+    tool_calls: int | None = 0
     stop_requested: bool = False
     event_ref: str | None = None
     # Empty with complete=False means the Backend cannot enumerate internal

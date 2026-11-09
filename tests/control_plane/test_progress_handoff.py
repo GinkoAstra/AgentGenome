@@ -655,8 +655,9 @@ def test_pi_prompt_and_dynamic_tool_schema_carry_the_progress_policy(tmp_path):
     fake.write_text(
         "#!/bin/sh\n"
         "for last; do :; done\n"
-        f"out=$(mktemp '{capture}/argv.XXXXXX')\n"
+        f"out=$(mktemp '{capture}/.writing.XXXXXX')\n"
         "printf '%s' \"$last\" > \"$out\"\n"
+        f"mv \"$out\" \"{capture}/argv.${{out##*.}}\"\n"
         "exit 0\n", encoding="utf-8")
     fake.chmod(0o755)
     backend = PiBackend(

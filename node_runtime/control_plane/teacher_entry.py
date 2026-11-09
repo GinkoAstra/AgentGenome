@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from . import discovery
-from .mcp_server import TOOL_NAMES
+from .http_api import PUBLIC_OPERATIONS as TOOL_NAMES
 from .resources import ControlPlaneError
 
 MCP_CONFIG_ENV = "AGENTGENOME_TEACHER_MCP"
@@ -111,9 +111,9 @@ host 与模型配置边界
 TEACHER_PI_PROFILE = ("--no-extensions", "--no-skills", "--no-context-files")
 # Pi's --tools whitelist also filters tools registered by an extension, so the
 # Graph tool names must be listed alongside the native file/bash tools. The
-# names come from the MCP server module and a test checks them against the
-# server's real tools/list, so the whitelist cannot drift from what the
-# extension discovers and registers.
+# names are the shared public operation list (the same tuple the MCP server
+# registers); a test checks them against the server's real tools/list, so the
+# whitelist cannot drift from what the extension discovers and registers.
 TEACHER_BASE_TOOLS = ("read", "bash", "edit", "write")
 
 

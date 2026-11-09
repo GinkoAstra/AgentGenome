@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -12,6 +14,20 @@ from node_runtime.control_plane.backends import (
     ScriptBackend,
     WorkerSpec,
 )
+
+
+def _process_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    try:
+        line = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return line[line.rindex(")") + 2] not in "ZXx"
 
 
 def spec(worker: str = "w1", node: str = "n1", epoch: int = 1,
@@ -111,6 +127,73 @@ def test_script_stop_is_not_stopped_until_observed(script):
     with pytest.raises(BackendError) as caught:
         backend.deliver(handle, {"brief": "late"}, "d2")
     assert caught.value.code == "stopped"
+
+
+def test_script_stop_before_delivery_is_recorded_without_launch(tmp_path):
+    backend = ScriptBackend(tmp_path / "data")
+    handle = backend.start(spec(desired="stopped"), ("w1", 1))
+    assert backend.observe(handle).observed == "idle"
+    assert backend.stop(handle, "stop-1").already_stopped
+    assert backend.observe(handle).observed == "stopped"
+    with pytest.raises(BackendError) as caught:
+        backend.deliver(handle, {"brief": "late"}, "d1")
+    assert caught.value.code == "stopped"
+
+
+def test_script_stop_ignores_changed_program_identity_only(tmp_path):
+    first = ScriptBackend(tmp_path / "data", identity={"program": "old"})
+    first.start(spec(), ("w1", 1))
+    second = ScriptBackend(tmp_path / "data", identity={"program": "new"})
+
+    # Active work under the old execution binding is still refused.
+    with pytest.raises(BackendError) as caught:
+        second.start(spec(), ("w1", 1))
+    assert caught.value.code == "capability_unsupported"
+
+    handle = second.start(spec(desired="stopped"), ("w1", 1))
+    assert second.stop(handle, "stop-1").already_stopped
+    assert second.observe(handle).observed == "stopped"
+    state = json.loads(
+        (tmp_path / "data" / "backends" / "script" / "w1" / "1"
+         / "state.json").read_text(encoding="utf-8"))
+    assert state["agent_identity"] == {"program": "old"}
+
+
+def test_script_changed_program_delivery_through_stop_handle_is_refused(tmp_path):
+    calls: list[str] = []
+    first = ScriptBackend(tmp_path / "data", identity={"program": "old"},
+                          agent=lambda *args: calls.append("old"))
+    handle = first.start(spec(), ("w1", 1))
+    assert first.deliver(handle, {"brief": "one"}, "d1").accepted
+    assert calls == ["old"]
+
+    state_path = (tmp_path / "data" / "backends" / "script" / "w1" / "1"
+                  / "state.json")
+    before = state_path.read_bytes()
+    second = ScriptBackend(tmp_path / "data", identity={"program": "new"},
+                           agent=lambda *args: calls.append("new"))
+    stopped_handle = second.start(spec(desired="stopped"), ("w1", 1))
+
+    with pytest.raises(BackendError) as caught:
+        second.deliver(stopped_handle, {"brief": "two"}, "d2")
+    assert caught.value.code == "capability_unsupported"
+    assert calls == ["old"]
+    assert state_path.read_bytes() == before
+
+    # The pre-existing receipt still deduplicates, and stop remains available.
+    assert second.deliver(stopped_handle, {"brief": "one"}, "d1").duplicate
+    assert second.stop(stopped_handle, "stop-1").accepted
+    assert second.observe(stopped_handle).observed == "stopped"
+    assert calls == ["old"]
+
+
+def test_script_stop_still_rejects_a_changed_committed_spec(tmp_path):
+    backend = ScriptBackend(tmp_path / "data", identity={"program": "same"})
+    backend.start(spec(), ("w1", 1))
+    with pytest.raises(BackendError) as caught:
+        backend.start(spec(node="other", desired="stopped"), ("w1", 1))
+    assert caught.value.code == "capability_unsupported"
+    assert caught.value.details["fields"] == ["node_id"]
 
 
 def test_script_checkpoint_restore_preserves_delivery(script, tmp_path):
@@ -422,10 +505,11 @@ def test_pi_delivery_captures_the_exact_launch_prompt(tmp_path):
 
 
 def _bound_spec(ref: dict, *, context: dict | None = None,
-                tool_profile: dict | None = None) -> WorkerSpec:
+                tool_profile: dict | None = None,
+                desired: str = "active") -> WorkerSpec:
     return WorkerSpec(
         worker_id="w1", node_id="n1", epoch=1, intent_seq=1,
-        backend_ref="pi", agent_ref="cleaner@v1", desired="active", run_id="r1",
+        backend_ref="pi", agent_ref="cleaner@v1", desired=desired, run_id="r1",
         context=context if context is not None else {
             "role": "worker", "brief": "clean the table",
             "contract_ref": "clean", "template_ref": "clean",
@@ -484,6 +568,123 @@ def test_pi_missing_material_or_unknown_tool_fails_explicitly(tmp_path):
         unknown.start(_bound_spec(ref, tool_profile={"backend_tools": ["shell"]}),
                       ("w1", 1))
     assert caught.value.code == "capability_unsupported"
+
+
+def test_pi_stop_before_delivery_skips_fetch_until_active(tmp_path):
+    content = b"frozen dataset"
+    digest = hashlib.sha256(content).hexdigest()
+    ref = {"id": f"sha256:{digest}", "sha256": digest, "size": len(content),
+           "media_type": "text/plain"}
+    reads: list[dict] = []
+    backend = PiBackend(
+        tmp_path / "data",
+        artifact_reader=lambda item: reads.append(item) or content)
+
+    handle = backend.start(_bound_spec(ref, desired="stopped"), ("w1", 1))
+    assert reads == [], "a stop-only start fetched frozen materials"
+    assert handle.pid is None
+    assert backend.stop(handle, "stop-1").already_stopped
+    assert backend.observe(handle).observed == "stopped"
+
+    active = backend.start(_bound_spec(ref), ("w1", 1))
+    assert reads, "the active path did not materialize the frozen input"
+    assert backend._state(("w1", 1))["prepared"] is True
+    [material] = list((Path(active.workspace) / "inputs").iterdir())
+    material.unlink()
+    with pytest.raises(BackendError) as caught:
+        backend.start(_bound_spec(ref), ("w1", 1))
+    assert caught.value.code == "material_missing"
+
+
+def test_pi_direct_delivery_to_an_unprepared_stop_state_is_refused(tmp_path):
+    content = b"frozen dataset"
+    digest = hashlib.sha256(content).hexdigest()
+    ref = {"id": f"sha256:{digest}", "sha256": digest, "size": len(content),
+           "media_type": "text/plain"}
+    reads: list[dict] = []
+    backend = PiBackend(
+        tmp_path / "data",
+        artifact_reader=lambda item: reads.append(item) or content)
+    handle = backend.start(_bound_spec(ref, desired="stopped"), ("w1", 1))
+    state_path = backend._state_path(("w1", 1))
+    before = state_path.read_bytes()
+
+    with pytest.raises(BackendError) as refused:
+        backend.deliver(handle, {"brief": "clean the table"}, "d1")
+
+    assert refused.value.code == "capability_unsupported"
+    assert refused.value.details.get("prepared") is False
+    assert reads == [], "an unprepared execution fetched frozen materials"
+    assert handle.pid is None
+    assert state_path.read_bytes() == before, "a refused delivery mutated state"
+    state = backend._state(("w1", 1))
+    assert state["order"] == [] and state["deliveries"] == {}
+    assert state["stop"] is None
+    assert not backend._events_path(("w1", 1), "d1").exists()
+    assert not backend._prompt_path(("w1", 1), "d1").exists()
+    assert not backend._spawn_record_path(("w1", 1), "d1").exists()
+
+    # The committed stop still completes; a later active start prepares.
+    assert backend.stop(handle, "stop-1").already_stopped
+    assert backend.observe(handle).observed == "stopped"
+    backend.start(_bound_spec(ref), ("w1", 1))
+    assert backend._state(("w1", 1))["prepared"] is True
+
+
+def test_pi_stop_still_rejects_a_changed_execution_binding(tmp_path):
+    content = b"frozen dataset"
+    digest = hashlib.sha256(content).hexdigest()
+    ref = {"id": f"sha256:{digest}", "sha256": digest, "size": len(content),
+           "media_type": "text/plain"}
+    backend = PiBackend(tmp_path / "data", artifact_reader=lambda item: content)
+    backend.start(_bound_spec(ref), ("w1", 1))
+    with pytest.raises(BackendError) as caught:
+        backend.start(_bound_spec(ref, context={"role": "reviewer"},
+                                  desired="stopped"), ("w1", 1))
+    assert caught.value.code == "capability_unsupported"
+
+
+def test_pi_stop_terminates_a_running_child_after_input_tamper(tmp_path):
+    content = b"frozen dataset"
+    digest = hashlib.sha256(content).hexdigest()
+    ref = {"id": f"sha256:{digest}", "sha256": digest, "size": len(content),
+           "media_type": "text/plain"}
+    fake = tmp_path / "fake-pi"
+    fake.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    fake.chmod(0o755)
+    backend = PiBackend(tmp_path / "data", executable=str(fake),
+                        artifact_reader=lambda item: content,
+                        max_wall_seconds=30)
+    handle = backend.start(_bound_spec(ref), ("w1", 1))
+    backend.deliver(handle, {"brief": "hang"}, "d1")
+
+    pid = None
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        delivery = backend._state(("w1", 1))["deliveries"]["d1"]
+        pid = delivery.get("pid")
+        if isinstance(pid, int) and _process_running(pid):
+            break
+        time.sleep(0.02)
+    assert isinstance(pid, int) and _process_running(pid)
+
+    [material] = list((Path(handle.workspace) / "inputs").iterdir())
+    material.unlink()
+    with pytest.raises(BackendError) as caught:
+        backend.start(_bound_spec(ref), ("w1", 1))
+    assert caught.value.code == "material_missing"
+
+    stopped_handle = backend.start(
+        _bound_spec(ref, desired="stopped"), ("w1", 1))
+    receipt = backend.stop(stopped_handle, "stop-1")
+    assert receipt.accepted and receipt.pid == pid
+    observation = backend.observe(stopped_handle)
+    deadline = time.monotonic() + 10
+    while observation.observed == "active" and time.monotonic() < deadline:
+        time.sleep(0.05)
+        observation = backend.observe(stopped_handle)
+    assert observation.observed == "stopped"
+    assert not _process_running(pid)
 
 
 def test_pi_system_tools_follow_the_committed_profile(tmp_path):

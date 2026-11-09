@@ -17,7 +17,9 @@ AgentGenome 当前是一个本机常驻服务，管理递归任务、执行绑�
 | Pi Worker / Checker 子进程 | `backends/pi_node_tools.mjs`、`pi_tools.mjs` | 通过 HTTP 提交结构化事实与候选，管理授权范围内的文件工具 |
 | 服务内部 | `trace.py::TraceService`、`RequestDiagnostics` | 状态投影、执行详情与请求诊断；不推进任务 |
 
-`ApiServer` 的请求循环与 Host 控制循环分开。SQLite 是嵌入式持久存储，不是单独启动的数据库服务；ScriptBackend 在服务内执行显式授权的程序。Pi Worker 是服务启动的子进程。
+`ApiServer` 管理请求循环和独立的控制线程；控制线程调用 `Host.reconcile_once()`，Host 负责组件组装与单次协调。SQLite 是嵌入式持久存储，不是单独启动的数据库服务；ScriptBackend 在服务内执行显式授权的程序。Pi Worker 是服务启动的子进程。
+
+HTTP 和 MCP 共用 `http_api.PUBLIC_OPERATIONS` 中的公开操作名。Teacher/Pi 安装入口读取这份定义，服务进程再加载实际 MCP SDK 和注册工具；参数适配仍由各协议入口处理。
 
 ## 数据对象
 
@@ -67,6 +69,10 @@ AgentGenome 当前是一个本机常驻服务，管理递归任务、执行绑�
 ## 完成、恢复与观测
 
 先持久提交意图，再执行；观察真实结果，再提交状态。`spec` 表示期望，`status` 表示事实，两者可能暂时不同。旧执行身份不能覆盖新绑定，重试写请求需保留原 request-id 与内容。
+
+单个 Worker 的 BackendError 在该 Worker 的协调边界记录，其他 Worker/Run 继续推进。停止路径仍核验持久执行绑定及实际进程身份，但不依赖当前程序代码、工具配置或输入材料能否继续运行。新投递则必须满足运行准备与程序身份要求；停止请求本身不能代替已停止的观察事实。
+
+服务的 `start/serve/stop` 使用数据目录中的 Host 所有权记录和服务记录关联实例，并核对内核 PID start-time。前台、后台和 console-script 使用同一所有权规则；不依赖命令行里是否显式写出 instance-id。
 
 任务提交候选后等待父或 Checker 接受。返工可以继续执行会话；需要系统独立调度和验收的工作才成为子任务。冻结的是契约、输入与接受的输出，并非所有流程都预先固定子任务数量。
 

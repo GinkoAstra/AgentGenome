@@ -16,7 +16,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from .api import Api
-from .http_api import dispatch
+from .http_api import PUBLIC_OPERATIONS, dispatch
 from .resources import Actor, ControlPlaneError
 
 SERVER_NAME = "agentgenome"
@@ -26,16 +26,12 @@ SERVER_INSTRUCTIONS = (
     "public API call; no tool mutates another tool's state."
 )
 
-# Single source of truth for the Graph tool surface. The Teacher launcher puts
-# these names in Pi's --tools whitelist, which also governs tools registered by
-# an extension, so a tool listed here is active without a second enable step.
-# A test asserts this stays identical to the server's real tools/list.
-TOOL_NAMES = (
-    "validate_definition", "publish_definition", "put_artifact",
-    "read_artifact", "create_run", "get_resource", "list_runs",
-    "list_resources", "read_events", "get_report", "set_run_intent",
-    "read_trace", "read_execution", "read_requests",
-)
+# The Graph tool surface is the shared public operation list. The Teacher
+# launcher puts these names in Pi's --tools whitelist, which also governs tools
+# registered by an extension, so a tool listed here is active without a second
+# enable step. A test asserts this stays identical to the server's real
+# tools/list.
+TOOL_NAMES = PUBLIC_OPERATIONS
 
 # Declared argument names per tool. The network middleware uses this to turn
 # an unknown argument into the same structured refusal the JSON adapter gives
@@ -132,20 +128,6 @@ def build_server(*, api: Api, actor_resolver: Any,
             return dispatch(api, actor(), operation, arguments, trace=trace)
         except ControlPlaneError as error:  # identity resolution failed
             return _failed(operation, error)
-
-    def definition_arguments(document: dict[str, Any] | None,
-                             definition_text: str) -> dict[str, Any]:
-        if document is not None:
-            arguments = {"document": document}
-            if definition_text:
-                # Preserve the conflict so the shared adapter rejects it.
-                arguments["definition_text"] = definition_text
-            return arguments
-        if definition_text:
-            # An empty default means "not supplied"; omitting the key keeps
-            # the adapter's exactly-one-source rule authoritative.
-            return {"definition_text": definition_text}
-        return {}
 
     @server.tool()
     def validate_definition(document: dict[str, Any] | None = None,
