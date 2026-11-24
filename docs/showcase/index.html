@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AgentGenome is an open-source control plane for versioned, review-gated Agent workflows. Explore the interactive candidate and Checker tour.">
+  <meta name="theme-color" content="#0b0d12">
+  <title>AgentGenome — Agent work, accepted with evidence</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css?v=5ca9c837f5fa">
+  <script type="module" src="app.mjs?v=1e35ee9caf6f71"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <nav class="nav shell" aria-label="Main navigation">
+      <a class="brand" href="#top" aria-label="AgentGenome home">
+        <span class="brand-mark" aria-hidden="true">AG</span>
+        <span>AgentGenome</span>
+      </a>
+      <div class="nav-links">
+        <a href="#why">Why</a>
+        <a href="#tour">Interactive tour</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#quickstart">Quickstart</a>
+      </div>
+      <a class="button button-small button-ghost" href="https://github.com/GinkoAstra/AgentGenome">GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero shell" id="top">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="pulse-dot"></span> Open-source Agent control plane</div>
+        <h1>Agent work isn’t done until the <span>evidence is accepted.</span></h1>
+        <p class="hero-lede">Turn multi-step SOPs into versioned workflows with frozen inputs, explicit Checkers, revision loops, and traceable artifacts.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#tour">Run the interactive tour <span aria-hidden="true">↓</span></a>
+          <a class="button button-ghost" href="#quickstart">Install locally</a>
+        </div>
+        <div class="hero-meta" aria-label="Project facts">
+          <span>Graph /2</span><span>Rust Core 0.2.1-dev</span><span>MIT licensed</span>
+        </div>
+      </div>
+      <div class="hero-visual" aria-label="Example review receipt">
+        <div class="window-bar"><span></span><span></span><span></span><small>run / clean-and-profile</small></div>
+        <div class="receipt-flow">
+          <div class="receipt-row"><span class="receipt-icon candidate">01</span><div><small>WORKER</small><strong>Candidate submitted</strong><code>clean.json · round 2</code></div><span class="status-chip neutral">proposed</span></div>
+          <div class="receipt-connector"></div>
+          <div class="receipt-row"><span class="receipt-icon checker">02</span><div><small>CHECKER</small><strong>Evidence recomputed</strong><code>6 rows · 2 invalid · 1 duplicate</code></div><span class="status-chip success">accepted</span></div>
+          <div class="receipt-connector"></div>
+          <div class="receipt-row"><span class="receipt-icon artifact">03</span><div><small>DELIVERY</small><strong>Artifacts unlocked</strong><code>clean.json + profile.json</code></div><span class="status-chip success">traceable</span></div>
+        </div>
+        <div class="hero-visual-footer"><span class="pulse-dot"></span> Candidate submission and acceptance stay separate.</div>
+      </div>
+    </section>
+
+    <section class="logo-strip" aria-label="Core capabilities">
+      <div class="shell strip-grid">
+        <span>Versioned SOPs</span><span>Independent Checkers</span><span>Persistent runs</span><span>Read-only traces</span><span>Content-addressed artifacts</span>
+      </div>
+    </section>
+
+    <section class="section shell" id="why">
+      <div class="section-heading split-heading">
+        <div><p class="kicker">WHY AGENTGENOME</p><h2>Turn open-ended chats into explicit, composable work.</h2></div>
+        <p>Give each Agent a concrete definition and each Node a bounded contract, so structure replaces an ever-growing conversation.</p>
+      </div>
+      <div class="feature-carousel" role="region" aria-roledescription="carousel" aria-label="AgentGenome features">
+        <div class="feature-viewport" id="feature-viewport" role="group" tabindex="0" aria-label="Feature cards. Use left and right arrow keys to choose a feature.">
+          <article class="feature-card featured" data-feature="0" aria-roledescription="slide" aria-label="1 of 3: More than a Skill" aria-current="true">
+            <div class="feature-visual feature-visual-definition" role="group" aria-label="A layered Graph YAML Agent specification defines four reusable Node objects, arranged in two different SOP compositions">
+              <svg class="feature-svg" viewBox="0 0 760 340" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="agent-definition-title agent-definition-desc">
+                <title id="agent-definition-title">Declared Agent objects composed into SOPs</title>
+                <desc id="agent-definition-desc">The Graph YAML object spec gives AGENT the dominant visual role and stacks Task, tools, inputs, and the acceptance boundary beneath it. The declaration produces four discrete Node objects. SOP A composes N1, N2, and N3; SOP B composes N4, N2, and N1. Repeated N1 and N2 identities show reuse, while different orders show composition.</desc>
+                <defs>
+                  <linearGradient id="spec-fill" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stop-color="#b7ef63" stop-opacity="0.075"/>
+                    <stop offset="1" stop-color="#b7ef63" stop-opacity="0.012"/>
+                  </linearGradient>
+                  <linearGradient id="sop-fill" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0" stop-color="#ffffff" stop-opacity="0.035"/>
+                    <stop offset="1" stop-color="#ffffff" stop-opacity="0.012"/>
+                  </linearGradient>
+                  <marker id="arrow-gray" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+                    <path d="M0 0L8 4L0 8Z" fill="#8b9388"/>
+                  </marker>
+                  <g id="node-object">
+                    <rect width="68" height="64" rx="12" fill="currentColor" fill-opacity="0.055" stroke="currentColor" stroke-width="1.4"/>
+                  </g>
+                  <g id="node-reference">
+                    <rect width="44" height="48" rx="9" fill="currentColor" fill-opacity="0.075" stroke="currentColor" stroke-width="1.25"/>
+                  </g>
+                </defs>
+                <g class="diagram-labels">
+                  <rect x="32" y="46" width="224" height="258" rx="18" fill="url(#spec-fill)" stroke="#b7ef63" stroke-width="1.5"/>
+                  <path d="M32 94H256" fill="none" stroke="#b7ef63" stroke-opacity="0.28"/>
+                  <text x="54" y="76" class="svg-title">GRAPH YAML</text>
+                  <text x="54" y="146" class="svg-agent">AGENT</text>
+                  <path d="M54 162H234M54 193H234M54 223H234M54 253H234" fill="none" stroke="#ffffff" stroke-opacity="0.075"/>
+                  <text x="54" y="184" class="svg-label">Task</text>
+                  <text x="54" y="214" class="svg-label">tools</text>
+                  <text x="54" y="244" class="svg-label">inputs</text>
+                  <path d="M33 254H255V286Q255 303 238 303H50Q33 303 33 286Z" fill="#b7ef63" fill-opacity="0.045"/>
+                  <text x="54" y="283" class="svg-accent">ACCEPTANCE BOUNDARY</text>
+
+                  <text x="286" y="157" text-anchor="middle" class="svg-micro">DEFINES</text>
+                  <path d="M256 174H304" fill="none" stroke="#8b9388" stroke-width="1.35" marker-end="url(#arrow-gray)"/>
+                  <text x="316" y="55" class="svg-micro">NODES</text>
+                  <g transform="translate(316 82)" style="color:#b7ef63"><use href="#node-object"/><text x="34" y="43" text-anchor="middle" class="svg-node">N1</text></g>
+                  <g transform="translate(398 82)" style="color:#aaa5d8"><use href="#node-object"/><text x="34" y="43" text-anchor="middle" class="svg-node">N2</text></g>
+                  <g transform="translate(316 182)" style="color:#82b7c9"><use href="#node-object"/><text x="34" y="43" text-anchor="middle" class="svg-node">N3</text></g>
+                  <g transform="translate(398 182)" style="color:#949b96"><use href="#node-object"/><text x="34" y="43" text-anchor="middle" class="svg-node">N4</text></g>
+
+                  <path d="M466 174H490V126H508" fill="none" stroke="#8b9388" stroke-width="1.25" stroke-linejoin="round" marker-end="url(#arrow-gray)"/>
+                  <path d="M490 174V250H508" fill="none" stroke="#8b9388" stroke-width="1.25" stroke-linejoin="round" marker-end="url(#arrow-gray)"/>
+                  <rect x="520" y="58" width="208" height="118" rx="16" fill="url(#sop-fill)" stroke="#ffffff" stroke-opacity="0.13"/>
+                  <text x="538" y="84" class="svg-sop">SOP A</text>
+                  <g transform="translate(538 102)" style="color:#b7ef63"><use href="#node-reference"/><text x="22" y="30" text-anchor="middle" class="svg-node-ref">N1</text></g>
+                  <path d="M590 126H598" fill="none" stroke="#59605b" stroke-width="1.2" marker-end="url(#arrow-gray)"/>
+                  <g transform="translate(606 102)" style="color:#aaa5d8"><use href="#node-reference"/><text x="22" y="30" text-anchor="middle" class="svg-node-ref">N2</text></g>
+                  <path d="M658 126H666" fill="none" stroke="#59605b" stroke-width="1.2" marker-end="url(#arrow-gray)"/>
+                  <g transform="translate(674 102)" style="color:#82b7c9"><use href="#node-reference"/><text x="22" y="30" text-anchor="middle" class="svg-node-ref">N3</text></g>
+
+                  <rect x="520" y="196" width="208" height="118" rx="16" fill="url(#sop-fill)" stroke="#ffffff" stroke-opacity="0.13"/>
+                  <text x="538" y="222" class="svg-sop">SOP B</text>
+                  <g transform="translate(538 240)" style="color:#949b96"><use href="#node-reference"/><text x="22" y="30" text-anchor="middle" class="svg-node-ref">N4</text></g>
+                  <path d="M590 264H598" fill="none" stroke="#59605b" stroke-width="1.2" marker-end="url(#arrow-gray)"/>
+                  <g transform="translate(606 240)" style="color:#aaa5d8"><use href="#node-reference"/><text x="22" y="30" text-anchor="middle" class="svg-node-ref">N2</text></g>
+                  <path d="M658 264H666" fill="none" stroke="#59605b" stroke-width="1.2" marker-end="url(#arrow-gray)"/>
+                  <g transform="translate(674 240)" style="color:#b7ef63"><use href="#node-reference"/><text x="22" y="30" text-anchor="middle" class="svg-node-ref">N1</text></g>
+                </g>
+              </svg>
+            </div>
+            <div class="feature-copy"><span class="feature-number">01 / AGENT DEFINITION</span><h3>More than a Skill: define the Agent</h3><p>Inspired by Docker’s explicit runtime boundary and Kubernetes’ declarative objects, Graph YAML defines the Agent, Task, tools, inputs, and acceptance boundary. Multi-turn execution becomes an SOP whose Nodes can be split, reused, and composed.</p><code>declared Agent · composable SOP</code></div>
+          </article>
+          <article class="feature-card" data-feature="1" aria-roledescription="slide" aria-label="2 of 3: Shrink the context">
+            <div class="feature-visual feature-visual-context" role="group" aria-label="A Memory context matrix divided by SOP, with nine selected cells carried into a compact Worker context while preserving dependencies, reviews, and artifacts">
+              <svg class="feature-svg" viewBox="0 0 760 340" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="worker-context-title worker-context-desc">
+                <title id="worker-context-title">SOP-sliced context becomes a structured Worker context</title>
+                <desc id="worker-context-desc">The large Memory context matrix is divided into three contiguous SOP regions. Nine highlighted cells are selected across those regions. Their SOP colors and dependency, review, and artifact patterns are preserved in the compact three by three Worker context. The Worker also carries a Task contract and declared tools.</desc>
+                <defs>
+                  <pattern id="cell-grid" width="30" height="30" patternUnits="userSpaceOnUse">
+                    <rect width="24" height="24" rx="4" fill="#22282e" stroke="#343a40" stroke-width="0.7"/>
+                  </pattern>
+                  <g id="pattern-dependency">
+                    <path d="M7 12H17" fill="none" stroke="currentColor" stroke-width="1.4"/>
+                    <circle cx="6" cy="12" r="2.6" fill="currentColor"/>
+                    <circle cx="18" cy="12" r="2.6" fill="currentColor"/>
+                  </g>
+                  <g id="pattern-review">
+                    <rect x="5.5" y="5.5" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M8.5 12L11 14.5L15.8 9.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </g>
+                  <g id="pattern-artifact">
+                    <rect x="5.5" y="5.5" width="13" height="13" rx="1.5" fill="currentColor" fill-opacity="0.9"/>
+                    <path d="M8.5 9.5H15.5M8.5 12.5H15.5M8.5 15.5H13" fill="none" stroke="#12151a" stroke-width="1.1" stroke-linecap="round"/>
+                  </g>
+                  <g id="selected-dependency">
+                    <rect width="24" height="24" rx="4" class="selected-cell"/>
+                    <use href="#pattern-dependency"/>
+                  </g>
+                  <g id="selected-review">
+                    <rect width="24" height="24" rx="4" class="selected-cell"/>
+                    <use href="#pattern-review"/>
+                  </g>
+                  <g id="selected-artifact">
+                    <rect width="24" height="24" rx="4" class="selected-cell"/>
+                    <use href="#pattern-artifact"/>
+                  </g>
+                  <marker id="arrow-green" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M0 0L8 4L0 8Z" fill="#b7ef63"/>
+                  </marker>
+                </defs>
+                <g class="diagram-labels">
+                  <text x="46" y="38" class="svg-title">MEMORY / CONTEXT</text>
+                  <g transform="translate(46 84)" style="color:#b7ef63">
+                    <rect x="-8" y="-8" width="130" height="100" rx="11" fill="currentColor" fill-opacity="0.025" stroke="currentColor" stroke-opacity="0.4"/>
+                    <text x="0" y="-18" class="svg-sop">SOP A</text>
+                    <rect width="114" height="84" fill="url(#cell-grid)"/>
+                    <use href="#selected-dependency" x="30" y="0"/>
+                    <use href="#selected-review" x="90" y="30"/>
+                    <use href="#selected-artifact" x="30" y="60"/>
+                  </g>
+                  <g transform="translate(46 210)" style="color:#aaa5d8">
+                    <rect x="-8" y="-8" width="130" height="100" rx="11" fill="currentColor" fill-opacity="0.025" stroke="currentColor" stroke-opacity="0.4"/>
+                    <text x="0" y="-18" class="svg-sop">SOP B</text>
+                    <rect width="114" height="84" fill="url(#cell-grid)"/>
+                    <use href="#selected-artifact" x="90" y="0"/>
+                    <use href="#selected-dependency" x="0" y="30"/>
+                    <use href="#selected-review" x="60" y="60"/>
+                  </g>
+                  <g transform="translate(190 84)" style="color:#82b7c9">
+                    <rect x="-8" y="-8" width="160" height="190" rx="11" fill="currentColor" fill-opacity="0.025" stroke="currentColor" stroke-opacity="0.4"/>
+                    <text x="0" y="-18" class="svg-sop">SOP C</text>
+                    <rect width="144" height="174" fill="url(#cell-grid)"/>
+                    <use href="#selected-dependency" x="120" y="30"/>
+                    <use href="#selected-artifact" x="60" y="60"/>
+                    <use href="#selected-review" x="30" y="120"/>
+                  </g>
+
+                  <text x="389" y="155" text-anchor="middle" class="svg-micro">SELECT</text>
+                  <path d="M362 174H420" fill="none" stroke="#b7ef63" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+                  <rect x="436" y="50" width="286" height="254" rx="18" fill="#b7ef63" fill-opacity="0.025" stroke="#b7ef63" stroke-opacity="0.72" stroke-width="1.4"/>
+                  <text x="458" y="79" class="svg-worker">ONE WORKER</text>
+                  <text x="458" y="107" class="svg-micro">WORKER CONTEXT · DECLARED INPUTS</text>
+                  <g transform="translate(458 126)">
+                    <g style="color:#b7ef63"><use href="#selected-dependency"/></g>
+                    <g style="color:#aaa5d8"><use href="#selected-dependency" x="30"/></g>
+                    <g style="color:#82b7c9"><use href="#selected-dependency" x="60"/></g>
+                    <g style="color:#b7ef63"><use href="#selected-review" y="30"/></g>
+                    <g style="color:#aaa5d8"><use href="#selected-review" x="30" y="30"/></g>
+                    <g style="color:#82b7c9"><use href="#selected-review" x="60" y="30"/></g>
+                    <g style="color:#b7ef63"><use href="#selected-artifact" y="60"/></g>
+                    <g style="color:#aaa5d8"><use href="#selected-artifact" x="30" y="60"/></g>
+                    <g style="color:#82b7c9"><use href="#selected-artifact" x="60" y="60"/></g>
+                  </g>
+                  <path d="M546 138H554M546 168H554M546 198H554" fill="none" stroke="#59615b" stroke-width="1"/>
+                  <text x="562" y="142" class="svg-structure">DEPENDENCIES</text>
+                  <text x="562" y="172" class="svg-structure">REVIEWS</text>
+                  <text x="562" y="202" class="svg-structure">ARTIFACTS</text>
+                  <path d="M458 228H700" fill="none" stroke="#ffffff" stroke-opacity="0.09"/>
+                  <text x="458" y="253" class="svg-label">TASK CONTRACT</text>
+                  <path d="M568 249H700" fill="none" stroke="#ffffff" stroke-opacity="0.07"/>
+                  <text x="458" y="278" class="svg-label">DECLARED TOOLS</text>
+                  <path d="M574 274H700" fill="none" stroke="#ffffff" stroke-opacity="0.07"/>
+                </g>
+              </svg>
+            </div>
+            <div class="feature-copy"><span class="feature-number">02 / TASK-SCOPED CONTEXT</span><h3>Shrink the context, keep the structure</h3><p>Give every Worker its own Task contract, declared inputs, and tools—not the entire conversation. Dependencies, reviews, and artifacts carry continuity as structured state, reducing reliance on long transcripts or Markdown memory files.</p><code>task-scoped context · structured continuity</code></div>
+          </article>
+          <article class="feature-card" data-feature="2" aria-roledescription="slide" aria-label="3 of 3: Design cost into the SOP">
+            <div class="feature-visual feature-visual-cost" role="group" aria-label="One task on a shared cost scale: the all-Opus baseline fills the full length, while the four-segment SOP ends earlier and leaves an explicit saved time and token region">
+              <svg class="feature-svg" viewBox="0 0 760 300" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="cost-control-title cost-control-desc">
+                <title id="cost-control-title">The SOP leaves visible saved cost on a shared scale</title>
+                <desc id="cost-control-desc">Both approaches start at the same left edge and use the same horizontal cost scale. Without an SOP, one all-Opus strip fills the full length. With an SOP, four connected Nodes end earlier; the remaining hatched region is saved time and token spend. N1 uses Opus for decomposition and N2 through N4 use DeepSeek. Each segment contains its token cells and evidence marker.</desc>
+                <defs>
+                  <g id="evidence-marker">
+                    <rect x="-7" y="-7" width="14" height="14" rx="3" fill="#12151a" stroke="currentColor" stroke-width="1"/>
+                    <path d="M-3 0L-0.5 2.5L4-3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                  </g>
+                  <rect id="token-cell" width="12" height="12" rx="2" fill="currentColor" fill-opacity="0.78"/>
+                  <clipPath id="cost-comparison-track">
+                    <rect x="44" y="148" width="672" height="116" rx="12" fill="#ffffff"/>
+                  </clipPath>
+                  <pattern id="saved-hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                    <path d="M0 0V10" fill="none" stroke="#b7ef63" stroke-opacity="0.13" stroke-width="2"/>
+                  </pattern>
+                </defs>
+                <g class="diagram-labels">
+                  <text x="44" y="26" class="svg-title">SAME TASK / TOTAL COST = TIME + TOKEN SPEND</text>
+                  <text x="44" y="46" class="svg-micro">WITHOUT SOP</text>
+                  <text x="716" y="46" text-anchor="end" class="svg-micro">OPUS THROUGHOUT</text>
+                  <g style="color:#aaa5d8" opacity="0.58">
+                    <rect x="44" y="64" width="672" height="36" rx="8" fill="currentColor" fill-opacity="0.09" stroke="currentColor" stroke-opacity="0.36"/>
+                    <use href="#token-cell" x="111" y="76"/>
+                    <use href="#token-cell" x="128" y="76"/>
+                    <use href="#token-cell" x="145" y="76"/>
+                    <use href="#token-cell" x="162" y="76"/>
+                    <use href="#token-cell" x="179" y="76"/>
+                    <use href="#token-cell" x="196" y="76"/>
+                    <use href="#token-cell" x="213" y="76"/>
+                    <use href="#token-cell" x="230" y="76"/>
+                    <use href="#token-cell" x="247" y="76"/>
+                    <use href="#token-cell" x="264" y="76"/>
+                    <use href="#token-cell" x="281" y="76"/>
+                    <use href="#token-cell" x="298" y="76"/>
+                    <use href="#token-cell" x="315" y="76"/>
+                    <use href="#token-cell" x="332" y="76"/>
+                    <use href="#token-cell" x="349" y="76"/>
+                    <use href="#token-cell" x="366" y="76"/>
+                    <use href="#token-cell" x="383" y="76"/>
+                    <use href="#token-cell" x="400" y="76"/>
+                    <use href="#token-cell" x="417" y="76"/>
+                    <use href="#token-cell" x="434" y="76"/>
+                    <use href="#token-cell" x="451" y="76"/>
+                    <use href="#token-cell" x="468" y="76"/>
+                    <use href="#token-cell" x="485" y="76"/>
+                    <use href="#token-cell" x="502" y="76"/>
+                    <use href="#token-cell" x="519" y="76"/>
+                    <use href="#token-cell" x="536" y="76"/>
+                    <use href="#token-cell" x="553" y="76"/>
+                    <use href="#token-cell" x="570" y="76"/>
+                    <use href="#token-cell" x="587" y="76"/>
+                    <use href="#token-cell" x="604" y="76"/>
+                    <use href="#token-cell" x="621" y="76"/>
+                    <use href="#token-cell" x="638" y="76"/>
+                  </g>
+
+                  <text x="44" y="130" class="svg-title" style="fill:#b7ef63">WITH SOP</text>
+                  <text x="716" y="130" text-anchor="end" class="svg-micro">SHARED COST SCALE</text>
+                  <g clip-path="url(#cost-comparison-track)">
+                    <rect x="44" y="148" width="110" height="116" fill="#aaa5d8" fill-opacity="0.14"/>
+                    <rect x="154" y="148" width="90" height="116" fill="#82b7c9" fill-opacity="0.105"/>
+                    <rect x="244" y="148" width="120" height="116" fill="#82b7c9" fill-opacity="0.105"/>
+                    <rect x="364" y="148" width="100" height="116" fill="#82b7c9" fill-opacity="0.105"/>
+                    <rect x="464" y="148" width="252" height="116" fill="url(#saved-hatch)"/>
+                  </g>
+                  <g style="color:#aaa5d8">
+                    <text x="56" y="172" class="svg-node">N1</text>
+                    <text x="56" y="195" class="svg-task">DECOMPOSE</text>
+                    <text x="56" y="216" class="svg-model">OPUS</text>
+                    <use href="#token-cell" x="76" y="236"/>
+                    <use href="#token-cell" x="93" y="236"/>
+                    <use href="#token-cell" x="110" y="236"/>
+                    <use href="#evidence-marker" x="138" y="172"/>
+                  </g>
+                  <g style="color:#82b7c9">
+                    <text x="166" y="172" class="svg-node">N2</text>
+                    <text x="166" y="195" class="svg-task">EXECUTE</text>
+                    <text x="166" y="216" class="svg-model">DEEPSEEK</text>
+                    <use href="#token-cell" x="185" y="236"/>
+                    <use href="#token-cell" x="202" y="236"/>
+                    <use href="#evidence-marker" x="228" y="172"/>
+                  </g>
+                  <g style="color:#82b7c9">
+                    <text x="256" y="172" class="svg-node">N3</text>
+                    <text x="256" y="195" class="svg-task">EXECUTE</text>
+                    <text x="256" y="216" class="svg-model">DEEPSEEK</text>
+                    <use href="#token-cell" x="273" y="236"/>
+                    <use href="#token-cell" x="290" y="236"/>
+                    <use href="#token-cell" x="307" y="236"/>
+                    <use href="#token-cell" x="324" y="236"/>
+                    <use href="#evidence-marker" x="348" y="172"/>
+                  </g>
+                  <g style="color:#82b7c9">
+                    <text x="376" y="172" class="svg-node">N4</text>
+                    <text x="376" y="195" class="svg-task">REVIEW</text>
+                    <text x="376" y="216" class="svg-model">DEEPSEEK</text>
+                    <use href="#token-cell" x="391" y="236"/>
+                    <use href="#token-cell" x="408" y="236"/>
+                    <use href="#token-cell" x="425" y="236"/>
+                    <use href="#evidence-marker" x="448" y="172"/>
+                  </g>
+                  <text x="590" y="202" text-anchor="middle" class="svg-task" style="fill:#b7ef63">SAVED COST</text>
+                  <text x="590" y="224" text-anchor="middle" class="svg-micro">TIME + TOKENS</text>
+                  <path d="M154 148V264M244 148V264M364 148V264" fill="none" stroke="#12151a" stroke-width="2"/>
+                  <path d="M464 148V264" fill="none" stroke="#b7ef63" stroke-opacity="0.5" stroke-width="1.2" stroke-dasharray="4 4"/>
+                  <rect x="44" y="148" width="672" height="116" rx="12" fill="none" stroke="#b7ef63" stroke-opacity="0.42" stroke-width="1.2"/>
+                </g>
+              </svg>
+            </div>
+            <div class="feature-copy"><span class="feature-number">03 / COST CONTROL</span><h3>Design cost into the SOP</h3><p>Explicit inputs, outputs, and acceptance rules make each step’s work easier to scope and compare. Bound provider calls, tool calls, rounds, depth, and runtime; use per-step evidence to guide model and token allocation by task complexity.</p><code>declared budgets · measurable steps</code></div>
+          </article>
+        </div>
+        <div class="feature-controls">
+          <button class="icon-button" id="feature-prev" type="button" aria-label="Previous feature" aria-controls="feature-viewport" disabled>←</button>
+          <div class="feature-dots" role="group" aria-label="Choose a feature">
+            <button class="feature-dot active" type="button" data-feature-target="0" aria-label="Show feature 1: More than a Skill" aria-pressed="true" aria-controls="feature-viewport"></button>
+            <button class="feature-dot" type="button" data-feature-target="1" aria-label="Show feature 2: Shrink the context" aria-pressed="false" aria-controls="feature-viewport"></button>
+            <button class="feature-dot" type="button" data-feature-target="2" aria-label="Show feature 3: Design cost into the SOP" aria-pressed="false" aria-controls="feature-viewport"></button>
+          </div>
+          <span class="feature-page" id="feature-page" aria-hidden="true">01 / 03</span>
+          <button class="icon-button" id="feature-next" type="button" aria-label="Next feature" aria-controls="feature-viewport">→</button>
+        </div>
+        <p class="sr-only" id="feature-status" aria-live="polite" aria-atomic="true">Showing feature 1 of 3: More than a Skill: define the Agent</p>
+      </div>
+      <div class="flow-line" aria-label="Workflow stages">
+        <span>Define SOP</span><i>→</i><span>Freeze version</span><i>→</i><span>Execute Nodes</span><i>→</i><span>Review candidates</span><i>→</i><span>Deliver artifacts</span>
+      </div>
+    </section>
+
+    <section class="section tour-section" id="tour">
+      <div class="shell">
+        <div class="section-heading tour-heading">
+          <div><p class="kicker">INTERACTIVE PRODUCT TOUR</p><h2>Watch a workflow earn its green check.</h2><p>Six messy contacts. Two dependent stages. Independent program Checkers. Choose whether the first candidate passes or needs correction.</p></div>
+          <span class="demo-label">Scripted local data · no model calls</span>
+        </div>
+
+        <div class="tour-app">
+          <div class="tour-toolbar">
+            <div class="scenario-switch" role="group" aria-label="Choose tour scenario">
+              <button class="scenario-button active" type="button" data-scenario="happy" aria-pressed="true">Happy path</button>
+              <button class="scenario-button" type="button" data-scenario="revision" aria-pressed="false">Revision loop</button>
+            </div>
+            <div class="playback-controls">
+              <button class="icon-button" id="reset-button" type="button" aria-label="Reset tour" title="Reset tour">↺</button>
+              <button class="button button-primary button-play" id="play-button" type="button"><span aria-hidden="true">▶</span> Play tour</button>
+              <button class="button button-ghost button-small" id="step-button" type="button">Step →</button>
+              <label class="speed-label">Speed <select id="speed-select"><option value="1400">1×</option><option value="700">2×</option><option value="350">4×</option></select></label>
+            </div>
+          </div>
+
+          <div class="run-status-bar">
+            <div><span class="run-dot" id="run-dot"></span><strong id="run-status">Ready to run</strong><span class="run-id">demo / pi-clean-and-profile</span></div>
+            <span id="step-count">0 / 9 events</span>
+          </div>
+          <div class="progress-track" aria-hidden="true"><span id="progress-fill"></span></div>
+
+          <div class="node-graph" id="node-graph" aria-label="Workflow graph">
+            <button class="graph-node" type="button" data-node="define"><span class="node-index">01</span><span class="node-state">idle</span><strong>Freeze</strong><small>Graph + input</small></button>
+            <span class="graph-arrow" aria-hidden="true">→</span>
+            <button class="graph-node" type="button" data-node="clean"><span class="node-index">02</span><span class="node-state">idle</span><strong>Clean</strong><small>Pi Worker</small></button>
+            <span class="graph-arrow" aria-hidden="true">→</span>
+            <button class="graph-node" type="button" data-node="clean-review"><span class="node-index">03</span><span class="node-state">idle</span><strong>Check</strong><small>Script Checker</small></button>
+            <span class="graph-arrow" aria-hidden="true">→</span>
+            <button class="graph-node" type="button" data-node="profile"><span class="node-index">04</span><span class="node-state">idle</span><strong>Profile</strong><small>Pi Worker</small></button>
+            <span class="graph-arrow" aria-hidden="true">→</span>
+            <button class="graph-node" type="button" data-node="profile-review"><span class="node-index">05</span><span class="node-state">idle</span><strong>Check</strong><small>Script Checker</small></button>
+            <span class="graph-arrow" aria-hidden="true">→</span>
+            <button class="graph-node" type="button" data-node="delivery"><span class="node-index">06</span><span class="node-state">idle</span><strong>Deliver</strong><small>Accepted output</small></button>
+          </div>
+          <div class="node-explainer" id="node-explainer"><strong>Definition + inputs</strong><span>Publishing freezes the Graph /2 definition. Uploading the source data creates an immutable, content-addressed input artifact.</span></div>
+
+          <div class="tour-detail-grid">
+            <section class="event-panel" aria-labelledby="event-title">
+              <div class="panel-label">CURRENT EVENT</div>
+              <div class="empty-event" id="empty-event"><span>▶</span><h3>Ready when you are</h3><p>Play the full sequence or move one event at a time. Select any graph node to inspect its role.</p></div>
+              <div id="event-content" hidden>
+                <div class="event-meta"><span id="event-kind">EVENT</span><time id="event-time">00:00</time></div>
+                <h3 id="event-title">Event</h3>
+                <p id="event-description"></p>
+              </div>
+              <div class="artifact-preview"><div class="artifact-heading"><span>EVENT PAYLOAD</span><span id="artifact-name">awaiting event</span></div><pre id="artifact-content">No payload yet. Step through the run to inspect frozen input, candidates, and review receipts.</pre></div>
+            </section>
+            <section class="timeline-panel" aria-labelledby="timeline-title">
+              <div class="panel-label" id="timeline-title">RUN TIMELINE <span>select to revisit</span></div>
+              <ol class="timeline" id="timeline"><li class="timeline-empty">Events will appear here as the run advances.</li></ol>
+            </section>
+          </div>
+          <div class="sr-only" id="tour-announcement" aria-live="polite"></div>
+        </div>
+        <p class="demo-boundary">This tour uses scripted data from <code>examples/agent-workflow/graph-clean.yaml</code>. It demonstrates the product model without connecting to a runtime. Real acceptance requires running the example and inspecting its actual receipts and artifacts.</p>
+      </div>
+    </section>
+
+    <section class="section shell" id="definition">
+      <div class="section-heading"><p class="kicker">ONE SOURCE OF TRUTH</p><h2>The SOP is executable, reviewable YAML.</h2><p>Move between the Graph, a business contract, and the accepted result. No separate showcase DSL.</p></div>
+      <div class="code-explorer">
+        <div class="code-tabs" role="tablist" aria-label="Definition examples">
+          <button id="tab-graph" role="tab" aria-selected="true" aria-controls="code-panel" data-code="graph" type="button">Graph YAML</button>
+          <button id="tab-contract" role="tab" aria-selected="false" aria-controls="code-panel" data-code="contract" type="button">Task contract</button>
+          <button id="tab-output" role="tab" aria-selected="false" aria-controls="code-panel" data-code="output" type="button">Accepted output</button>
+        </div>
+        <div class="code-window" id="code-panel" role="tabpanel" aria-labelledby="tab-graph">
+          <div class="code-window-bar"><span id="code-file">graph-clean.yaml</span><button class="copy-button" id="copy-code" type="button">Copy</button></div>
+          <pre><code id="code-content"></code></pre>
+        </div>
+        <aside class="code-notes" id="code-notes"><span class="note-index">GRAPH /2</span><h3>Dependencies carry accepted state.</h3><p><code>needs: [clean]</code> makes profile wait. <code>{from: clean}</code> binds the accepted clean artifact, not an unreviewed candidate.</p><a href="https://github.com/GinkoAstra/AgentGenome/blob/main/rust/assets/teacher/sop-guide.md">Read the full protocol ↗</a></aside>
+      </div>
+    </section>
+
+    <section class="section architecture-section" id="architecture">
+      <div class="shell">
+        <div class="section-heading split-heading"><div><p class="kicker">DESIGNED FOR SEPARATION</p><h2>One control plane. Clear responsibilities.</h2></div><p>Select a layer to see what it owns—and what it deliberately does not decide.</p></div>
+        <div class="architecture-explorer">
+          <div class="architecture-layers" role="group" aria-label="Architecture layers">
+            <button type="button" data-layer="api" class="active" aria-pressed="true"><span>01</span><strong>API</strong><small>Facts, versions, permissions</small></button>
+            <button type="button" data-layer="scheduler" aria-pressed="false"><span>02</span><strong>Scheduler</strong><small>Graph and execution binding</small></button>
+            <button type="button" data-layer="controller" aria-pressed="false"><span>03</span><strong>Controller</strong><small>Committed execution intents</small></button>
+            <button type="button" data-layer="backend" aria-pressed="false"><span>04</span><strong>Backend</strong><small>Agents and trusted programs</small></button>
+            <button type="button" data-layer="trace" aria-pressed="false"><span>05</span><strong>Trace</strong><small>Read-only observation</small></button>
+          </div>
+          <div class="architecture-detail"><span class="note-index" id="layer-label">API / AUTHORITATIVE STATE</span><h3 id="layer-title">One service owns the facts.</h3><p id="layer-text">HTTP, MCP, and event subscriptions share the same API. Authentication, protocol checks, versions, transactions, and persistence stay at this boundary.</p><div class="layer-boundary"><strong>Does not decide</strong><span id="layer-boundary">Whether a business artifact is correct.</span></div></div>
+        </div>
+        <div class="architecture-flow"><span>Ordinary Pi / Teacher</span><i>HTTP + MCP</i><span>API Server</span><i>same facts</i><span>Trace / CLI / SSE</span></div>
+      </div>
+    </section>
+
+    <section class="section shell quickstart-section" id="quickstart">
+      <div class="quickstart-card">
+        <div class="quickstart-copy"><p class="kicker">START LOCALLY</p><h2>Bring your own model.<br>Keep your workflow inspectable.</h2><p>Build the native Rust Core, install the ordinary Pi integration, and explicitly start the service. Then enable <code>/agentgenome</code> in a new Pi session.</p><div class="requirements"><span>Rust toolchain</span><span>Pi CLI</span><span>Configured model</span></div><a href="https://github.com/GinkoAstra/AgentGenome/blob/main/docs/quickstart.md">Open the full quickstart ↗</a></div>
+        <div class="install-window"><div class="code-window-bar"><span>terminal</span><button class="copy-button" id="copy-install" type="button">Copy</button></div><pre id="install-commands"><span class="code-comment"># from the AgentGenome repository</span>
+cargo build --release --locked --manifest-path rust/Cargo.toml
+CORE="$PWD/rust/target/release/agentgenome"
+"$CORE" client install --client pi
+
+<span class="code-comment"># start the service with your provider and model</span>
+"$CORE" start --backend pi \
+  --provider YOUR_PROVIDER --model YOUR_MODEL
+
+<span class="code-comment"># then open a new Pi session and enter:</span>
+/agentgenome</pre></div>
+      </div>
+    </section>
+
+    <section class="section shell final-notes">
+      <div class="final-note"><span>What it proves</span><h3>Versioned execution and explicit acceptance</h3><p>Real examples separate Worker output, Checker receipts, runtime state, and independent artifact verification.</p></div>
+      <div class="final-note"><span>What it doesn’t claim</span><h3>“The model said so” is not enough</h3><p>No arbitrary side-effect replay, open-ended research correctness, or universal CLI subagent support is implied.</p></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell footer-grid"><div><a class="brand" href="#top"><span class="brand-mark">AG</span><span>AgentGenome</span></a><p>Versioned Agent workflows. Accepted with evidence.</p></div><div class="footer-links"><a href="https://github.com/GinkoAstra/AgentGenome">Repository</a><a href="https://github.com/GinkoAstra/AgentGenome/tree/main/examples">Examples</a><a href="https://github.com/GinkoAstra/AgentGenome/blob/main/docs/concepts.md">Concepts</a><a href="https://github.com/GinkoAstra/AgentGenome/blob/main/LICENSE">MIT License</a></div></div>
+    <div class="shell footer-bottom"><span>Built around a simple idea: candidate ≠ accepted.</span><a href="#top">Back to top ↑</a></div>
+  </footer>
+</body>
+</html>
